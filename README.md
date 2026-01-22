@@ -9,7 +9,7 @@ This theme fits the course because detective work naturally requires organizing 
 ## Team
 
 - Thomas Corbin
-- Elliot Chamil
+- Elliott Chmil
 
 ## Proposal
 
