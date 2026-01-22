@@ -2,23 +2,15 @@
 
 ## Detective AI (Game)
 
-_Detective AI_ is a turn-based "case solving" system that starts from an
-initial Knowledge Base (KB) of facts and rules, then queries a standalone
-scenario program (the "world") to collect new evidence. After each query, the
-system adds the observation to its KB, performs logical inference to derive
-additional facts, and uses search/optimization to decide what to query next.
-The final output is (1) a reproducible query and reasoning log and (2) a
-conclusion stating what happened (e.g., culprit, timeline) with key supporting
-inferences.
+_Detective AI_ is a turn-based mystery-solving game where an AI detective investigates cases by gathering evidence, reasoning about clues, and solving crimes. The system starts with initial case information (like crime scene details and witness statements) and a limited number of questions it can ask. The AI uses logical reasoning to understand what happened, searches for the best questions to ask next, and builds up evidence to identify the culprit and explain what happened.
 
-This theme fits the course because detective work naturally requires formal
-knowledge representation (facts/rules), inference, and planning under limited
-actions (query budget). The system is designed to be testable: given the same
-initial case and query budget, it should produce the same conclusion and trace.
+This theme fits the course because detective work naturally requires organizing facts and rules (knowledge representation), drawing conclusions from evidence (logical inference), and deciding what information to gather next (search and planning). The system uses **Propositional Logic** to encode case facts and rules into a knowledge base that can be queried and checked for contradictions. **Search algorithms** help the detective decide which questions to ask next by exploring different investigation paths and choosing the most promising ones. **First-Order Logic** allows the system to reason about relationships between people, places, and times (e.g., "Alice was in the kitchen at 8pm"). **Advanced Search and Optimization** techniques help evaluate competing theories about what happened, finding the best explanation that fits all the evidence. **Reinforcement Learning** can improve the detective's strategy over many cases by learning which types of questions are most effective. The detective domain provides concrete, testable problems where the system must produce explainable conclusions with clear success criteria (correctly identifying the culprit and explaining the reasoning). The system is designed to be testable: given the same initial case and query budget, it should produce the same conclusion and trace.
 
 ## Modules
 
 ### Module 1: Propositional Logic KB (Case Facts + Game Rules)
+
+**What it does:** This module organizes the initial case information into a structured format that the system can work with. Think of it like a detective's notebook where all the starting clues are written down in a consistent way, and the basic rules of logic are applied to check if the information makes sense or if there are any contradictions.
 
 **Topics:** Propositional Logic (knowledge bases, entailment, CNF, resolution
 or chaining)
@@ -44,6 +36,8 @@ consume this KB (directly or via summaries).
 ---
 
 ### Module 2: Informed Search for "Next Best Query"
+
+**What it does:** This module acts like the detective's strategy planner, deciding which questions to ask next when there's a limited number of questions allowed. It explores different investigation paths and chooses the most promising ones, similar to how a detective might prioritize checking certain locations or questioning specific people based on what seems most likely to reveal important information.
 
 **Topics:** Search (heuristics, A* / IDA* / Beam Search)
 
@@ -73,6 +67,8 @@ inference.
 
 ### Module 3: First-Order Logic Evidence Store + Inference
 
+**What it does:** This module takes the simple facts collected and turns them into richer knowledge about relationships. For example, it can figure out that "if Alice was in the kitchen at 8pm but in the bedroom at 9pm, then she must have moved between those times." It's like connecting the dots between different pieces of evidence to discover new facts that weren't explicitly stated.
+
 **Topics:** First-Order Logic (predicates, quantifiers, unification,
 inference/chaining)
 
@@ -99,6 +95,8 @@ selection.
 
 ### Module 4: Advanced Search / Optimization over Case Hypotheses
 
+**What it does:** This module generates different theories about what happened (like "Alice did it using method X at time Y") and evaluates which theory best fits all the evidence. It's like a detective considering multiple scenarios and scoring each one based on how well it explains the clues, then finding the best explanation through an optimization process.
+
 **Topics:** Advanced Search (optimization, hill climbing / simulated annealing /
 genetic algorithms)
 
@@ -122,6 +120,8 @@ the final conclusion and can guide what to query next (Module 2).
 ---
 
 ### Module 5: Reinforcement Learning to Improve Query Strategy
+
+**What it does:** This module learns from experience by practicing on many detective cases. Over time, it gets better at choosing which questions to ask, learning patterns like "when uncertainty is high, prioritize location questions" or "when suspects are equally likely, ask about alibis." It's like a detective who gets smarter with each case they solve.
 
 **Topics:** Reinforcement Learning (MDP, policy/value functions, Q-learning)
 
@@ -148,6 +148,8 @@ states/rewards).
 ---
 
 ### Module 6: Evaluation Metrics + Final Report
+
+**What it does:** This module checks how well the system performed and generates the final detective's report. It compares the system's conclusions to the correct answers, analyzes mistakes when things go wrong, and creates a clear, readable report explaining who did it, how, when, and what evidence supports the conclusion.
 
 **Topics:** Evaluation Metrics (accuracy-style measures, error analysis);
 optional templated reporting
