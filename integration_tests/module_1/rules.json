@@ -1,0 +1,99 @@
+{
+  "rules": [
+    {
+      "id": "R001",
+      "description": "If someone is in a room with a weapon and the door is locked, then forced entry is possible",
+      "if": ["At_PERSON_ROOM_TIME", "Weapon_WEAPON_ROOM", "DoorLocked_ROOM_TIME"],
+      "then": "ForcedEntry_ROOM_TIME"
+    },
+    {
+      "id": "R002",
+      "description": "If fingerprints of a person are found in a room, then that person was in the room",
+      "if": ["Fingerprints_ROOM_PERSON"],
+      "then": "At_PERSON_ROOM_TIME"
+    },
+    {
+      "id": "R003",
+      "description": "If a person has an alibi at a time, then they cannot be the culprit at that time",
+      "if": ["Alibi_PERSON_TIME"],
+      "then": "NOT_Culprit_PERSON_TIME"
+    },
+    {
+      "id": "R004",
+      "description": "If victim is found in a room with blood stains, then murder occurred in that room",
+      "if": ["VictimFound_ROOM", "BloodStains_ROOM"],
+      "then": "MurderLocation_ROOM"
+    },
+    {
+      "id": "R005",
+      "description": "If noise was heard in a room at a time and victim found there, then murder happened at that time",
+      "if": ["NoiseHeard_ROOM_TIME", "VictimFound_ROOM"],
+      "then": "MurderTime_TIME"
+    },
+    {
+      "id": "R006",
+      "description": "If a person is in a room with a weapon and murder occurred there, then they are a suspect",
+      "if": ["At_PERSON_ROOM_TIME", "Weapon_WEAPON_ROOM", "MurderLocation_ROOM"],
+      "then": "Suspect_PERSON"
+    },
+    {
+      "id": "R007",
+      "description": "If door is locked and no key found, then forced entry occurred",
+      "if": ["DoorLocked_ROOM_TIME", "NOT_KeyFound_ROOM"],
+      "then": "ForcedEntry_ROOM_TIME"
+    },
+    {
+      "id": "R008",
+      "description": "If person has alibi and is not in room, then they cannot be culprit",
+      "if": ["Alibi_PERSON_TIME", "NOT_At_PERSON_ROOM_TIME"],
+      "then": "NOT_Culprit_PERSON_TIME"
+    },
+    {
+      "id": "R009",
+      "description": "If murder location is known and person was there with weapon, then they used that weapon",
+      "if": ["MurderLocation_ROOM", "At_PERSON_ROOM_TIME", "Weapon_WEAPON_ROOM"],
+      "then": "UsedWeapon_PERSON_WEAPON"
+    },
+    {
+      "id": "R010",
+      "description": "If person is culprit and used weapon in room, then complete solution",
+      "if": ["Culprit_PERSON", "UsedWeapon_PERSON_WEAPON", "MurderLocation_ROOM"],
+      "then": "Solution_PERSON_WEAPON_ROOM"
+    },
+    {
+      "id": "R011",
+      "description": "Contradiction: Person cannot be in two rooms at the same time",
+      "if": ["At_PERSON_ROOM1_TIME", "At_PERSON_ROOM2_TIME", "NOT_ROOM1_EQ_ROOM2"],
+      "then": "CONTRADICTION"
+    },
+    {
+      "id": "R012",
+      "description": "Contradiction: Person cannot have alibi and be culprit at same time",
+      "if": ["Alibi_PERSON_TIME", "Culprit_PERSON_TIME"],
+      "then": "CONTRADICTION"
+    },
+    {
+      "id": "R013",
+      "description": "If weapon is in room and person is in room, then person had access to weapon",
+      "if": ["Weapon_WEAPON_ROOM", "At_PERSON_ROOM_TIME"],
+      "then": "HadAccess_PERSON_WEAPON"
+    },
+    {
+      "id": "R014",
+      "description": "If person had access to weapon and murder occurred in same room, then strong suspect",
+      "if": ["HadAccess_PERSON_WEAPON", "MurderLocation_ROOM", "At_PERSON_ROOM_TIME"],
+      "then": "StrongSuspect_PERSON"
+    }
+  ],
+  "game_constraints": {
+    "suspects": ["ColonelMustard", "MissScarlet", "ProfessorPlum", "MrGreen", "MrsWhite", "MrsPeacock"],
+    "weapons": ["Candlestick", "Dagger", "LeadPipe", "Revolver", "Rope", "Wrench"],
+    "rooms": ["Ballroom", "BilliardRoom", "Conservatory", "DiningRoom", "Hall", "Kitchen", "Library", "Lounge", "Study"],
+    "time_points": ["8pm", "9pm", "10pm"]
+  },
+  "metadata": {
+    "game_type": "Clue",
+    "version": "1.0",
+    "description": "Propositional logic rules for Clue detective game"
+  }
+}
