@@ -34,7 +34,7 @@ def read_case_init(path: str | Path) -> dict:
         dict with keys initial_evidence (proposition name -> true/false), metadata.
     """
     with open(path, encoding="utf-8") as file_handle:
-        return json.load(file_handle)
+        return json.load(file_handle) #load the JSON file and return the dictionary
 
 
 def read_rules(path: str | Path) -> dict:
@@ -94,7 +94,7 @@ def ground_rule(rule: dict, game_constraints: dict) -> list[dict]:
     # 3) Cartesian product: one combination = one value per placeholder
     #Lots of help from Cursor Agent
     value_lists = [our_placeholder_values[placeholder] for placeholder in our_placeholders] #list of lists of values for each placeholder
-    for combination in itertools.product(*value_lists): #generate all possible combinations of placeholder values
+    for combination in itertools.product(*value_lists): #generate all possible combinations of placeholder values (Cartesian product)
         substitution_map = dict(zip(our_placeholders, combination)) #map placeholders to their values
         # Skip when rule needs ROOM1 != ROOM2 but they're the same
         if "ROOM1" in substitution_map and "ROOM2" in substitution_map and substitution_map["ROOM1"] == substitution_map["ROOM2"]:
@@ -129,8 +129,11 @@ def ground_all_rules(rules: list[dict], game_constraints: dict) -> list[dict]:
     rules["game_constraints"]. Calls ground_rule (above) for each rule and
     collects all concrete rules into one list for infer (below).
     """
-    # TODO: implement
-    return []
+    full_grounded_rules = []
+    for rule in rules:
+        grounded_for_this_rule = ground_rule(rule, game_constraints)
+        full_grounded_rules.extend(grounded_for_this_rule) #add the grounded rules for this rule to the full list
+    return full_grounded_rules
 
 
 def build_kb(initial_evidence: dict) -> dict:
