@@ -63,8 +63,62 @@ def ground_rule(rule: dict, game_constraints: dict) -> list[dict]:
     and _PLACEHOLDER_TO_KEY at top of file). Replaces those with every allowed
     value from game_constraints so one template becomes many concrete rules.
     """
-    # TODO: implement
-    return []
+
+    #Basically just a giant jumble of for loops and if statements
+    #list for grounded rules
+    grounded_rules = []
+    our_placeholders_set = set()
+    # 1) Identify rule placeholders (from all "if" premises and the "then" conclusion)
+    for if_statement in rule["if"]:
+        current_if_statement = if_statement.split("_")
+        for placeholder in _PLACEHOLDERS:
+            if placeholder in current_if_statement:
+                our_placeholders_set.add(placeholder)
+
+    # rule["then"] is a single string, not a list
+    then_parts = rule["then"].split("_")
+    for placeholder in _PLACEHOLDERS:
+        if placeholder in then_parts:
+            our_placeholders_set.add(placeholder)
+
+    # Keep placeholders in _PLACEHOLDERS order so substitution order is consistent
+    our_placeholders = [placeholder for placeholder in _PLACEHOLDERS if placeholder in our_placeholders_set]
+
+    #2) Map placeholders to their corresponding keys in game_constraints:
+    our_placeholder_values = {}
+    for our_placeholder in our_placeholders:
+        placeholder_key = _PLACEHOLDER_TO_KEY[our_placeholder]
+        placeholder_values = game_constraints[placeholder_key]
+        our_placeholder_values[our_placeholder] = placeholder_values
+
+    # 3) Cartesian product: one combination = one value per placeholder
+    #Lots of help from Cursor Agent
+    value_lists = [our_placeholder_values[placeholder] for placeholder in our_placeholders] #list of lists of values for each placeholder
+    for combination in itertools.product(*value_lists): #generate all possible combinations of placeholder values
+        substitution_map = dict(zip(our_placeholders, combination)) #map placeholders to their values
+        # Skip when rule needs ROOM1 != ROOM2 but they're the same
+        if "ROOM1" in substitution_map and "ROOM2" in substitution_map and substitution_map["ROOM1"] == substitution_map["ROOM2"]:
+            continue
+        # Substitute in each "if" premise (in _PLACEHOLDERS order so ROOM1 before ROOM)
+    #4) Substitute in each "if" premise and "then"
+        grounded_if = []
+        for if_str in rule["if"]:
+            current_if_str = if_str
+            for placeholder in _PLACEHOLDERS:
+                if placeholder in substitution_map:
+                    current_if_str = current_if_str.replace(placeholder, substitution_map[placeholder])
+            grounded_if.append(current_if_str)
+        # Substitute in "then"
+        grounded_then = rule["then"]
+        for placeholder in _PLACEHOLDERS:
+            if placeholder in substitution_map:
+                grounded_then = grounded_then.replace(placeholder, substitution_map[placeholder])
+        grounded_rules.append({
+            "id": rule["id"],
+            "if": grounded_if,
+            "then": grounded_then,
+        })
+    return grounded_rules
 
 
 def ground_all_rules(rules: list[dict], game_constraints: dict) -> list[dict]:
