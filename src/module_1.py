@@ -2,6 +2,10 @@
 # Thomas Corbin and Elliott Chmil
 # Written with the help of Cursor Agent
 # 1/29/2026
+#
+# KB design: the knowledge base stores only TRUE values. A proposition that is
+# not in the KB is treated as false; false propositions cannot imply or chain
+# to become true.
 
 import itertools
 import json
@@ -139,39 +143,52 @@ def ground_all_rules(rules: list[dict], game_constraints: dict) -> list[dict]:
 def build_kb(initial_evidence: dict) -> dict:
     """Build the starting knowledge base from the case's initial evidence.
 
-    The initial_evidence dict is from case_init.json (case["initial_evidence"] in
-    run, where case comes from read_case_init(case_init_path)). The returned KB
-    is a dict from proposition name to True or False; we copy initial_evidence
-    into it. This dict is then passed to infer and may be checked by has_contradiction.
+    The KB stores only TRUE values; absence means false (cannot imply or chain).
+    We copy only propositions that are True in initial_evidence into a new dict.
+    This dict is then passed to infer and may be checked by has_contradiction.
     """
-    # TODO: implement
-    return {}
+    return {prop: True for prop, val in initial_evidence.items() if val is True}
+
+
+_NOT_PREFIX = "NOT_"
 
 
 def rule_premises_met(grounded_rule: dict, kb: dict) -> bool:
     """Check whether all 'if' conditions of a grounded rule are true in the KB.
 
-    grounded_rule has 'if' and 'then' keys (output of ground_rule). kb is the
-    knowledge base dict (from build_kb, updated by apply_rule). A rule can fire
-    only when every proposition in grounded_rule["if"] is already in kb with
-    value True. Returns True if that is the case.
+    KB stores only True; absence means false. For each premise in grounded_rule["if"]:
+    if it starts with NOT_, the rest must be false (absent or not True in kb);
+    otherwise the proposition must be in kb (i.e. true). Returns True only if
+    all premises are satisfied.
     """
-    # TODO: implement
-    return False
+    for premise in grounded_rule["if"]:
+        if premise.startswith(_NOT_PREFIX):
+            prop = premise[len(_NOT_PREFIX) :]
+            if kb.get(prop) is True:
+                return False
+        else:
+            if kb.get(premise) is not True:
+                return False
+    return True
 
 
 def apply_rule(grounded_rule: dict, kb: dict) -> bool:
     """If the rule's premises are met, add its conclusion to the KB.
 
-    grounded_rule and kb same as in rule_premises_met. Uses rule_premises_met to
-    check; if every grounded_rule["if"] condition is in kb as True, add
-    grounded_rule["then"] to kb. If the conclusion is the literal "CONTRADICTION"
-    (as in rules like R011, R012 in rules.json), record it and return True so
-    infer can stop. Returns True if something was added or contradiction found,
-    False otherwise.
+    KB stores only True. If rule_premises_met is True, add grounded_rule["then"]
+    to kb as True (or record CONTRADICTION). Returns True if something was
+    added or contradiction found, False otherwise.
     """
-    # TODO: implement
-    return False
+    if not rule_premises_met(grounded_rule, kb):
+        return False
+    conclusion = grounded_rule["then"]
+    if conclusion == "CONTRADICTION":
+        kb["CONTRADICTION"] = True
+        return True
+    if kb.get(conclusion) is True:
+        return False
+    kb[conclusion] = True
+    return True
 
 
 def infer(kb: dict, grounded_rules: list[dict]) -> None:
@@ -183,20 +200,24 @@ def infer(kb: dict, grounded_rules: list[dict]) -> None:
     anything new, or when apply_rule returns True for a CONTRADICTION. Modifies
     kb in place (same dict that has_contradiction can later check).
     """
-    # TODO: implement
-    pass
+    while True:
+        changed = False
+        for rule in grounded_rules:
+            if apply_rule(rule, kb):
+                changed = True
+                if has_contradiction(kb):
+                    return
+        if not changed:
+            break
 
 
 def has_contradiction(kb: dict) -> bool:
     """Return True if we have inferred that a contradiction occurred.
 
-    kb is the same dict built by build_kb and updated by infer. In rules.json,
-    some rules (e.g. R011, R012) have "then": "CONTRADICTION"; if apply_rule
-    fired one of those, that key will be in kb. Return True if so, so run (or
-    report writing) can flag it (e.g. in questionable_evidence_report.txt).
+    KB stores only True; CONTRADICTION is stored as kb["CONTRADICTION"] = True
+    when a contradiction rule fires. Return True if that key is present.
     """
-    # TODO: implement
-    return False
+    return kb.get("CONTRADICTION") is True
 
 
 # --- Entry point ---

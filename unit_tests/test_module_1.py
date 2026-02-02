@@ -153,13 +153,13 @@ class TestBuildKb(unittest.TestCase):
         out = module_1.build_kb({"At_Alice_Study_9pm": True})
         self.assertIsInstance(out, dict)
 
-    def test_contains_initial_evidence_entries(self):
-        """The returned KB should contain every key-value pair from initial_evidence."""
-        # We are testing that the KB is initialized with all propositions from initial_evidence (same keys and values).
+    def test_contains_only_true_from_initial_evidence(self):
+        """The returned KB should contain only propositions that are True in initial_evidence (absence = false)."""
+        # KB stores only TRUE; false propositions are not stored and cannot imply or chain.
         evidence = {"At_Alice_Study_9pm": True, "Weapon_Candlestick_Study": False}
         kb = module_1.build_kb(evidence)
         self.assertIs(kb.get("At_Alice_Study_9pm"), True)
-        self.assertIs(kb.get("Weapon_Candlestick_Study"), False)
+        self.assertNotIn("Weapon_Candlestick_Study", kb)
 
 
 # --- rule_premises_met ---
@@ -182,11 +182,11 @@ class TestRulePremisesMet(unittest.TestCase):
         kb = {"At_Alice_Study_9pm": True}
         self.assertIs(module_1.rule_premises_met(grounded, kb), False)
 
-    def test_false_when_premise_in_kb_but_false(self):
-        """rule_premises_met should return False when a premise is in kb but value is False."""
-        # We are testing that a premise must be True in the KB; False does not satisfy the rule.
+    def test_false_when_premise_absent_from_kb(self):
+        """rule_premises_met should return False when a premise is absent (false; KB stores only True)."""
+        # Absence means false; the premise must be present (true) in the KB to fire.
         grounded = {"if": ["At_Alice_Study_9pm"], "then": "X"}
-        kb = {"At_Alice_Study_9pm": False}
+        kb = {}
         self.assertIs(module_1.rule_premises_met(grounded, kb), False)
 
 
