@@ -233,7 +233,28 @@ def run(case_init_path: str | Path, rules_path: str | Path) -> None:
     Returns:
         None.
     """
+    #read the case_init and rules files
     case = read_case_init(case_init_path)
     rules = read_rules(rules_path)
-    # TODO: build KB, infer, check contradictions, write evidence_found.json and questionable_evidence_report.txt
+    #build the knowledge base
+    kb = build_kb(case["initial_evidence"])
+    #ground the rules
+    all_rules = ground_all_rules(rules["rules"], rules["game_constraints"])
+    #infer the knowledge base
+    infer(kb, all_rules)
+    #check for contradictions
+    contradiction_found = has_contradiction(kb)
+    # Write outputs to the same directory as case_init.json
+    out_dir = Path(case_init_path).parent
+    evidence_path = out_dir / 'output_test_files' / "evidence_found.json"
+    report_path = out_dir / 'output_test_files'  / "questionable_evidence_report.txt"
+
+    with open(evidence_path, "w", encoding="utf-8") as evidence_file:
+        json.dump({"evidence": {proposition_name: True for proposition_name in kb if proposition_name != "CONTRADICTION"}, "metadata": case.get("metadata", {})}, evidence_file, indent=2)
+
+    with open(report_path, "w", encoding="utf-8") as report_file:
+        report_file.write("Questionable Evidence Report\n")
+        report_file.write("==========================\n\n")
+        report_file.write(f"Contradiction detected: {contradiction_found}\n")
+        report_file.write(f"Total propositions (true): {len([proposition_name for proposition_name in kb if proposition_name != 'CONTRADICTION'])}\n")
     return None

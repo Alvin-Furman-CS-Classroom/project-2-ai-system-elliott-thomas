@@ -1,0 +1,38 @@
+{
+  "evidence": {
+    "At_ColonelMustard_Study_9pm": true,
+    "At_MissScarlet_Ballroom_9pm": true,
+    "At_MrGreen_Conservatory_9pm": true,
+    "At_MrsPeacock_DiningRoom_9pm": true,
+    "Weapon_Candlestick_Study": true,
+    "Weapon_LeadPipe_Kitchen": true,
+    "DoorLocked_Study_9pm": true,
+    "Fingerprints_Study_ColonelMustard": true,
+    "Fingerprints_Ballroom_MissScarlet": true,
+    "Alibi_MissScarlet_9pm": true,
+    "Alibi_ProfessorPlum_9pm": true,
+    "Alibi_MrsWhite_9pm": true,
+    "VictimFound_Study": true,
+    "NoiseHeard_Study_9pm": true,
+    "BloodStains_Study": true,
+    "ForcedEntry_Study_9pm": true,
+    "At_ColonelMustard_Study_8pm": true,
+    "At_ColonelMustard_Study_10pm": true,
+    "At_MissScarlet_Ballroom_8pm": true,
+    "At_MissScarlet_Ballroom_10pm": true,
+    "NOT_Culprit_MissScarlet_9pm": true,
+    "NOT_Culprit_ProfessorPlum_9pm": true,
+    "NOT_Culprit_MrsWhite_9pm": true,
+    "MurderLocation_Study": true,
+    "MurderTime_9pm": true,
+    "Suspect_ColonelMustard": true,
+    "UsedWeapon_ColonelMustard_Candlestick": true,
+    "HadAccess_ColonelMustard_Candlestick": true,
+    "StrongSuspect_ColonelMustard": true
+  },
+  "metadata": {
+    "case_id": "CLUE_CASE_001",
+    "timestamp": "2024-01-15T21:00:00Z",
+    "investigator": "Detective_AI"
+  }
+}
