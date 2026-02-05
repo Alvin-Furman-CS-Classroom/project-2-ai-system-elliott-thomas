@@ -9,6 +9,7 @@
 
 import itertools
 import json
+import random
 from pathlib import Path
 
 # Placeholder names in rule templates; order matters for substitution (longer first to avoid ROOM matching inside ROOM1)
@@ -31,16 +32,34 @@ _PLACEHOLDER_TO_KEY = {
 
 
 def read_case_init(path: str | Path) -> dict:
-    """Load case initial data from a JSON file.
+    """Load case initial data from a JSON file and split into two equal-sized dicts.
+
+    Reads the evidence dictionary (from "initial_evidence" key), randomly assigns
+    each (proposition, value) pair to one of two dicts, and returns both.
+    The second dict (witness_knowledge) is not used yet.
 
     Args:
         path: File path to case_init.json (str or Path).
 
     Returns:
-        dict with keys initial_evidence (proposition name -> true/false), metadata.
+        dict with keys kb_evidence, witness_knowledge, metadata. kb_evidence and
+        witness_knowledge are equal-sized (or differ by one) random splits.
     """
     with open(path, encoding="utf-8") as file_handle:
-        return json.load(file_handle)  # Parse JSON into a Python dict
+        raw = json.load(file_handle)
+    evidence = raw.get("initial_evidence", raw)
+    if not isinstance(evidence, dict):
+        evidence = {}
+    items = list(evidence.items())
+    random.shuffle(items)
+    mid = len(items) // 2
+    kb_evidence = dict(items[:mid])
+    witness_knowledge = dict(items[mid:])
+    return {
+        "metadata": raw.get("metadata", {}),
+        "kb_evidence": kb_evidence,
+        "witness_knowledge": witness_knowledge,
+    }
 
 
 def read_rules(path: str | Path) -> dict:
@@ -237,7 +256,7 @@ def run(case_init_path: str | Path, rules_path: str | Path) -> None:
     """
     case = read_case_init(case_init_path)
     rules = read_rules(rules_path)
-    kb = build_kb(case["initial_evidence"])
+    kb = build_kb(case["kb_evidence"])
     all_rules = ground_all_rules(rules["rules"], rules["game_constraints"])
     infer(kb, all_rules)
     contradiction_found = has_contradiction(kb)
