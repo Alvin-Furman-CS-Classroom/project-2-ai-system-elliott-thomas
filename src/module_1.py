@@ -16,6 +16,7 @@ from pathlib import Path
 _PLACEHOLDERS = ("ROOM1", "ROOM2", "PERSON", "ROOM", "TIME", "WEAPON")
 
 _CONTRADICTION_KEY = "CONTRADICTION"
+_CONTRADICTION_GROUNDED_RULES_KEY = "_CONTRADICTION_GROUNDED_RULES"  # List of full grounded rules that fired CONTRADICTION (id + if + then).
 
 # Which key in game_constraints each placeholder uses
 _PLACEHOLDER_TO_KEY = {
@@ -202,6 +203,14 @@ def apply_rule(grounded_rule: dict, kb: dict) -> bool:
     conclusion = grounded_rule["then"]
     if conclusion == _CONTRADICTION_KEY:
         kb[_CONTRADICTION_KEY] = True
+        if _CONTRADICTION_GROUNDED_RULES_KEY not in kb:
+            kb[_CONTRADICTION_GROUNDED_RULES_KEY] = []
+        # Store a copy of the grounded rule (id + concrete if/then with person, time, place, etc.).
+        kb[_CONTRADICTION_GROUNDED_RULES_KEY].append({
+            "id": grounded_rule.get("id", "?"),
+            "if": list(grounded_rule["if"]),
+            "then": grounded_rule["then"],
+        })
         return True  # Contradiction rule fired; infer will stop.
     if kb.get(conclusion) is True:
         return False  # Conclusion already in KB; nothing new added.
@@ -225,9 +234,12 @@ def infer(kb: dict, grounded_rules: list[dict]) -> None:
             if apply_rule(rule, kb):
                 changed = True
                 if has_contradiction(kb):
-                    return  # Stop immediately on contradiction.
+                    # Keep going this pass so we record every contradiction rule that fires.
+                    pass
         if not changed:
             break  # No rule fired this pass; we're done.
+        if has_contradiction(kb):
+            break  # Contradiction found; stop after this pass (report will list all that fired).
 
 
 def has_contradiction(kb: dict) -> bool:
@@ -268,14 +280,29 @@ def run(case_init_path: str | Path, rules_path: str | Path) -> None:
     evidence_path = output_subdir / "evidence_found.json"
     report_path = output_subdir / "questionable_evidence_report.txt"
 
-    # KB may contain CONTRADICTION; exclude it from evidence output.
-    evidence_propositions = {proposition_name: True for proposition_name in kb if proposition_name != _CONTRADICTION_KEY}
+    # KB may contain CONTRADICTION and _CONTRADICTION_GROUNDED_RULES; exclude from evidence output.
+    evidence_propositions = {
+        proposition_name: True
+        for proposition_name in kb
+        if proposition_name not in (_CONTRADICTION_KEY, _CONTRADICTION_GROUNDED_RULES_KEY)
+    }
     with open(evidence_path, "w", encoding="utf-8") as evidence_file:
         json.dump({"evidence": evidence_propositions, "metadata": case.get("metadata", {})}, evidence_file, indent=2)
+
+    # Build id -> description map from rules for the report.
+    rule_id_to_description = {r["id"]: r.get("description", "") for r in rules["rules"]}
 
     with open(report_path, "w", encoding="utf-8") as report_file:
         report_file.write("Questionable Evidence Report\n")
         report_file.write("==========================\n\n")
         report_file.write(f"Contradiction detected: {contradiction_found}\n")
-        report_file.write(f"Total propositions (true): {len(evidence_propositions)}\n")  # Excludes CONTRADICTION
+        report_file.write(f"Total propositions (true): {len(evidence_propositions)}\n")
+        if contradiction_found:
+            report_file.write("\nGrounded rules that produced a contradiction:\n")
+            for gr in kb.get(_CONTRADICTION_GROUNDED_RULES_KEY, []):
+                rule_id = gr.get("id", "?")
+                description = rule_id_to_description.get(rule_id, "(no description)")
+                premises = ", ".join(gr.get("if", []))
+                report_file.write(f"  - {rule_id}: {description}\n")
+                report_file.write(f"    Grounded premises: {premises}\n")
     return None

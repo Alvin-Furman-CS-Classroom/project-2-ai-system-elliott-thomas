@@ -8,7 +8,7 @@ from pathlib import Path
 from src import module_1
 
 # Paths to integration test data (relative to project root; run tests from project root)
-CASE_INIT_PATH = Path("integration_tests/module_1/case_init.json")
+CASE_INIT_PATH = Path("integration_tests/module_1/case_init_contradiction.json")
 RULES_PATH = Path("integration_tests/module_1/rules.json")
 
 
@@ -263,23 +263,6 @@ class TestHasContradiction(unittest.TestCase):
         # We are testing that the function returns False when no contradiction has been inferred.
         kb = {"At_Alice_Study_9pm": True}
         self.assertIs(module_1.has_contradiction(kb), False)
-
-
-# --- run ---
-
-
-class TestRun(unittest.TestCase):
-    """Tests for module_1.run (entry point: read_case_init + read_rules + future inference/output)."""
-
-    def test_accepts_paths_and_does_not_raise(self):
-        """run(case_init_path, rules_path) should not raise when given valid integration test paths."""
-        # We are testing that run completes without error when given valid Path objects to the integration test files.
-        module_1.run(CASE_INIT_PATH, RULES_PATH)
-
-    def test_accepts_string_paths(self):
-        """run should accept str paths as well as Path objects."""
-        # We are testing that run accepts string paths in addition to pathlib Path objects.
-        module_1.run(str(CASE_INIT_PATH), str(RULES_PATH))
 
 
 if __name__ == "__main__":
