@@ -1,5 +1,9 @@
 Questionable Evidence Report
 ==========================
 
-Contradiction detected: False
-Total propositions (true): 29
+Contradiction detected: True
+Total propositions (true): 30
+
+Grounded rules that produced a contradiction:
+  - R012: Contradiction: Person cannot have alibi and be culprit at same time
+    Grounded premises: Alibi_MissScarlet_9pm, Culprit_MissScarlet_9pm
