@@ -8,7 +8,7 @@ from pathlib import Path
 from src import module_1
 
 # Paths to integration test data (relative to project root; run tests from project root)
-CASE_INIT_PATH = Path("integration_tests/module_1/case_init_contradiction.json")
+CASE_INIT_PATH = Path("integration_tests/module_1/case_inits/case_init.json")
 RULES_PATH = Path("integration_tests/module_1/rules.json")
 
 
@@ -26,24 +26,25 @@ def _tiny_constraints():
 
 
 class TestReadCaseInit(unittest.TestCase):
-    """Tests for module_1.read_case_init (loads case_init.json)."""
+    """Tests for module_1.read_case_init (loads case_init.json, returns kb_evidence + witness_knowledge + metadata)."""
 
-    def test_returns_dict_with_initial_evidence_and_metadata(self):
-        """read_case_init(path) should return a dict with keys 'initial_evidence' and 'metadata'."""
-        # We are testing that the return value has the expected top-level keys and types.
+    def test_returns_dict_with_kb_evidence_witness_knowledge_and_metadata(self):
+        """read_case_init(path) should return a dict with keys 'kb_evidence', 'witness_knowledge', and 'metadata'."""
         result = module_1.read_case_init(CASE_INIT_PATH)
-        self.assertIn("initial_evidence", result)
+        self.assertIn("kb_evidence", result)
+        self.assertIn("witness_knowledge", result)
         self.assertIn("metadata", result)
-        self.assertIsInstance(result["initial_evidence"], dict)
+        self.assertIsInstance(result["kb_evidence"], dict)
+        self.assertIsInstance(result["witness_knowledge"], dict)
         self.assertIsInstance(result["metadata"], dict)
 
-    def test_initial_evidence_maps_propositions_to_bool(self):
-        """initial_evidence should map proposition names (str) to True or False."""
-        # We are testing that every entry in initial_evidence is a string key and a boolean value.
+    def test_evidence_dicts_map_propositions_to_bool(self):
+        """kb_evidence and witness_knowledge should map proposition names (str) to True or False."""
         result = module_1.read_case_init(CASE_INIT_PATH)
-        for key, val in result["initial_evidence"].items():
-            self.assertIsInstance(key, str)
-            self.assertIn(val, (True, False))
+        for evidence_dict in (result["kb_evidence"], result["witness_knowledge"]):
+            for key, val in evidence_dict.items():
+                self.assertIsInstance(key, str)
+                self.assertIn(val, (True, False))
 
     def test_nonexistent_path_raises(self):
         """read_case_init should raise FileNotFoundError when the file does not exist."""
