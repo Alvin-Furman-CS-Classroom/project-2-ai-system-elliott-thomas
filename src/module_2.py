@@ -1,27 +1,50 @@
-"""Module 2: Informed search for next best query (witness knowledge selection)."""
+"""Module 2: Informed search for next best query (witness knowledge selection).
+
+This module picks which witness facts to "ask" next and adds them to the
+knowledge base. It uses a simple priority list so we ask about the most
+useful facts first (e.g. alibis, locations, weapons) for finding suspects.
+"""
 # Thomas Corbin and Elliott Chmil
 # Written with the help of Cursor Agent
 
 import json
 from pathlib import Path
 
-# Priority order for proposition prefixes (higher index = higher priority to query).
-# Propositions that drive suspect/culprit inference are prioritized.
+# How many witness facts to select when n is not specified (avoids magic number in signature).
+DEFAULT_NUM_FACTS_TO_SELECT = 5
+
+# Key written to evidence_found.json for the list of witness queries we added.
+_EVIDENCE_KEY_WITNESS_QUERIES = "witness_queries_added"
+
+# Order of proposition prefixes: earlier in the list = higher priority to query.
+# We prefer facts that help infer suspects/culprits (alibi, location, weapon, etc.).
 _QUERY_PRIORITY = (
-    "Alibi_",       # Directly affects NOT_Culprit
-    "At_",          # Location; premises for Suspect, HadAccess, UsedWeapon
-    "Weapon_",      # Weapon location; premises for HadAccess, Suspect
-    "Fingerprints_",  # Implies At_ via R002
-    "VictimFound_", "BloodStains_", "NoiseHeard_", "DoorLocked_",
-    "KeyFound_", "Culprit_",
+    "Alibi_",         # Directly affects NOT_Culprit
+    "At_",            # Location; used by Suspect, HadAccess, UsedWeapon rules
+    "Weapon_",        # Weapon location; used by HadAccess, Suspect rules
+    "Fingerprints_",  # Can imply At_ via rules (e.g. R002)
+    "VictimFound_",
+    "BloodStains_",
+    "NoiseHeard_",
+    "DoorLocked_",
+    "KeyFound_",
+    "Culprit_",
 )
 
 
-def _score_proposition(proposition: str) -> int:
-    """Return a score for prioritization; higher = more valuable to query."""
-    for i, prefix in enumerate(_QUERY_PRIORITY):
+# --- Scoring and selection ---
+
+
+def get_priority_score(proposition: str) -> int:
+    """Return a priority score for a proposition; higher score = more valuable to query.
+
+    Propositions whose prefix appears earlier in _QUERY_PRIORITY get a higher
+    score. Propositions that don't match any prefix get 0.
+    """
+    for index, prefix in enumerate(_QUERY_PRIORITY):
         if proposition.startswith(prefix):
-            return len(_QUERY_PRIORITY) - i
+            # Earlier in list -> higher score (we use length - index so first = highest).
+            return len(_QUERY_PRIORITY) - index
     return 0
 
 
@@ -29,19 +52,19 @@ def select_and_add_witness_facts(
     kb: dict,
     witness_knowledge: dict,
     rules_path: str | Path | None = None,
-    n: int = 5,
+    n: int = DEFAULT_NUM_FACTS_TO_SELECT,
 ) -> list[str]:
-    """Decide which n facts from witness_knowledge to query, add them to kb, return the chosen list.
+    """Choose n facts from witness_knowledge to query, add them to the KB, and return the list.
 
-    Uses a heuristic based on rules.json proposition types: prioritizes facts that
-    drive suspect/culprit inference (Alibi, At_, Weapon, Fingerprints, etc.).
-    Only propositions with value True are added to the KB (KB stores only True).
+    Uses a heuristic: we rank facts by type (alibi, location, weapon, etc.) and
+    pick the top n. Only propositions with value True are added to the KB
+    (same as module_1: KB stores only True).
 
     Args:
-        kb: Knowledge base dict (mutated in place).
+        kb: Knowledge base dict (updated in place).
         witness_knowledge: Dict of proposition name -> bool (facts not yet in kb).
-        rules_path: Optional path to rules.json; used for rule-aware scoring (future).
-        n: Number of facts to select (default 5).
+        rules_path: Optional path to rules.json; reserved for future use.
+        n: How many facts to select (default 5).
 
     Returns:
         List of the n proposition names that were selected (and added to kb if True).
@@ -49,19 +72,26 @@ def select_and_add_witness_facts(
     if not witness_knowledge or n <= 0:
         return []
 
-    # Score each proposition; higher score = more valuable.
-    scored = [(prop, _score_proposition(prop)) for prop in witness_knowledge]
-    # Sort by score descending, then by proposition name for tie-breaking.
-    scored.sort(key=lambda x: (-x[1], x[0]))
+    # Score each proposition; higher score = we want to query it sooner.
+    scored_propositions = [
+        (proposition, get_priority_score(proposition))
+        for proposition in witness_knowledge
+    ]
+    # Sort by score descending; use proposition name to break ties.
+    scored_propositions.sort(key=lambda item: (-item[1], item[0]))
 
-    chosen = [prop for prop, _ in scored[:n]]
+    # Take the top n proposition names.
+    selected = [proposition for proposition, _ in scored_propositions[:n]]
 
-    # Add chosen facts to kb (only True values; KB stores only True).
-    for prop in chosen:
-        if witness_knowledge.get(prop) is True:
-            kb[prop] = True
+    # Add selected facts to the KB only when their value is True (KB stores only True).
+    for proposition in selected:
+        if witness_knowledge.get(proposition) is True:
+            kb[proposition] = True
 
-    return chosen
+    return selected
+
+
+# --- Writing evidence output ---
 
 
 def write_questions_to_evidence(
@@ -69,25 +99,28 @@ def write_questions_to_evidence(
     questions: list[str],
     witness_knowledge: dict,
 ) -> None:
-    """Append the questions (and their values) added to the KB into evidence_found.json.
+    """Write the questions we added (and their values) into evidence_found.json.
 
-    Reads the existing evidence_found.json, adds a "witness_queries_added" key
-    with a list of {question, value} entries, and writes the file back.
+    Reads the existing file, adds a "witness_queries_added" key with a list of
+    {question, value} entries, then writes the file back.
 
     Args:
         evidence_path: Path to evidence_found.json.
-        questions: List of proposition names that were queried and added.
-        witness_knowledge: Dict mapping proposition -> bool (source of values).
+        questions: List of proposition names that were queried and added to the KB.
+        witness_knowledge: Dict mapping proposition -> bool (where we get the values).
     """
     path = Path(evidence_path)
-    data: dict = {}
+    data = {}
     if path.exists():
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
+        with open(path, encoding="utf-8") as file_handle:
+            data = json.load(file_handle)
+
+    # Build the list of {question, value} for each selected question.
     queries_added = [
-        {"question": q, "value": witness_knowledge.get(q)}
-        for q in questions
+        {"question": question, "value": witness_knowledge.get(question)}
+        for question in questions
     ]
-    data["witness_queries_added"] = queries_added
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
+    data[_EVIDENCE_KEY_WITNESS_QUERIES] = queries_added
+
+    with open(path, "w", encoding="utf-8") as file_handle:
+        json.dump(data, file_handle, indent=2)
