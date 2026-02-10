@@ -1,0 +1,24 @@
+{
+  "witness_queries_added": [
+    {
+      "question": "Alibi_ColonelMustard_9pm",
+      "value": false
+    },
+    {
+      "question": "Alibi_MrsPeacock_9pm",
+      "value": false
+    },
+    {
+      "question": "Alibi_MrsWhite_9pm",
+      "value": true
+    },
+    {
+      "question": "At_ColonelMustard_Study_9pm",
+      "value": true
+    },
+    {
+      "question": "At_MrsWhite_Kitchen_9pm",
+      "value": false
+    }
+  ]
+}
