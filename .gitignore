@@ -13,3 +13,8 @@ build/
 *.log
 .idea/
 .vscode/
+# unit test output artifacts
+**/test_kb_fol_output.json
+**/test_inferred_output.json
+**/test_run_kb_fol.json
+**/test_run_inferred.json
