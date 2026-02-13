@@ -112,8 +112,15 @@ def write_questions_to_evidence(
     path = Path(evidence_path)
     data = {}
     if path.exists():
-        with open(path, encoding="utf-8") as file_handle:
-            data = json.load(file_handle)
+        try:
+            with open(path, encoding="utf-8") as file_handle:
+                data = json.load(file_handle)
+        except OSError as e:
+            raise OSError(f"Failed to read evidence file {path}: {e}") from e
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid JSON in evidence file {path}: {e}") from e
+        if not isinstance(data, dict):
+            raise ValueError(f"evidence file {path} must contain a JSON object (dict), got {type(data).__name__}")
 
     # Build the list of {question, value} for each selected question.
     queries_added = [
@@ -122,5 +129,8 @@ def write_questions_to_evidence(
     ]
     data[_EVIDENCE_KEY_WITNESS_QUERIES] = queries_added
 
-    with open(path, "w", encoding="utf-8") as file_handle:
-        json.dump(data, file_handle, indent=2)
+    try:
+        with open(path, "w", encoding="utf-8") as file_handle:
+            json.dump(data, file_handle, indent=2)
+    except OSError as e:
+        raise OSError(f"Failed to write evidence file {path}: {e}") from e

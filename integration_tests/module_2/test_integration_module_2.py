@@ -9,6 +9,8 @@ so you can manually inspect the results after running it.
 """
 
 import json
+import shutil
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -16,14 +18,16 @@ from src import module_1, module_2
 
 
 _THIS_DIR = Path(__file__).resolve().parent
+_MODULE_1_DIR = _THIS_DIR.parent / "module_1"
 _OUTPUT_DIR = _THIS_DIR / "output_test_files"
 _OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # Where this test will write its evidence file.
 EVIDENCE_OUTPUT_PATH = _OUTPUT_DIR / "evidence_found_module_2.json"
 
-# Reuse the existing integration test case_init.json from module_1.
-CASE_INIT_PATH = _THIS_DIR.parent / "module_1" / "case_inits" / "case_init.json"
+# Reuse the existing integration test case_init.json and rules from module_1.
+CASE_INIT_PATH = _MODULE_1_DIR / "case_inits" / "case_init.json"
+RULES_PATH = _MODULE_1_DIR / "rules.json"
 
 
 class TestModule2Integration(unittest.TestCase):
@@ -74,6 +78,41 @@ class TestModule2Integration(unittest.TestCase):
         recorded_questions = [entry["question"] for entry in data["witness_queries_added"]]
         for proposition_name in selected:
             self.assertIn(proposition_name, recorded_questions)
+
+    def test_full_pipeline_module1_then_module2_extends_evidence_file(self) -> None:
+        """Run module_1.run() then module_2: evidence_found.json from module_1 can be extended by module_2."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp = Path(tmp_dir)
+            shutil.copy(CASE_INIT_PATH, tmp / "case_init.json")
+            shutil.copy(RULES_PATH, tmp / "rules.json")
+
+            # Module 1: run inference and write evidence_found.json to tmp/output_test_files/
+            module_1.run(tmp / "case_init.json", tmp / "rules.json")
+            evidence_path = tmp / "output_test_files" / "evidence_found.json"
+            self.assertTrue(evidence_path.exists(), "module_1.run() should create evidence_found.json")
+
+            with open(evidence_path, encoding="utf-8") as f:
+                data_before = json.load(f)
+            self.assertIn("evidence", data_before, "module_1 output should contain 'evidence'")
+
+            # Module 2: build KB and witness_knowledge from same case, select facts, extend evidence file
+            case = module_1.read_case_init(tmp / "case_init.json")
+            kb = module_1.build_kb(case["kb_evidence"])
+            witness_knowledge = case["witness_knowledge"]
+            selected = module_2.select_and_add_witness_facts(
+                kb, witness_knowledge, n=module_2.DEFAULT_NUM_FACTS_TO_SELECT
+            )
+            module_2.write_questions_to_evidence(evidence_path, selected, witness_knowledge)
+
+            # File should still have module_1's keys and now have witness_queries_added from module_2
+            with open(evidence_path, encoding="utf-8") as f:
+                data_after = json.load(f)
+            self.assertIn("evidence", data_after, "evidence key should be preserved")
+            self.assertEqual(data_after["evidence"], data_before["evidence"])
+            self.assertIn("witness_queries_added", data_after)
+            recorded = [e["question"] for e in data_after["witness_queries_added"]]
+            for prop in selected:
+                self.assertIn(prop, recorded)
 
 
 if __name__ == "__main__":

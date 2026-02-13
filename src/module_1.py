@@ -45,9 +45,25 @@ def read_case_init(path: str | Path) -> dict:
     Returns:
         dict with keys kb_evidence, witness_knowledge, metadata. kb_evidence and
         witness_knowledge are equal-sized (or differ by one) random splits.
+
+    Raises:
+        FileNotFoundError: If the file does not exist.
+        ValueError: If the file exists but is not valid JSON or has unexpected structure.
     """
-    with open(path, encoding="utf-8") as file_handle:
-        raw = json.load(file_handle)
+    path = Path(path)
+    try:
+        with open(path, encoding="utf-8") as file_handle:
+            raw = json.load(file_handle)
+    except FileNotFoundError:
+        raise
+    except OSError as e:
+        raise OSError(f"Failed to read case_init file {path}: {e}") from e
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Invalid JSON in case_init file {path}: {e}") from e
+
+    if not isinstance(raw, dict):
+        raise ValueError(f"case_init file {path} must contain a JSON object (dict), got {type(raw).__name__}")
+
     evidence = raw.get("initial_evidence", raw)
     if not isinstance(evidence, dict):
         evidence = {}
@@ -71,9 +87,26 @@ def read_rules(path: str | Path) -> dict:
 
     Returns:
         dict with keys rules (list of {id, if, then}), game_constraints, metadata.
+
+    Raises:
+        FileNotFoundError: If the file does not exist.
+        ValueError: If the file exists but is not valid JSON or has unexpected structure.
     """
-    with open(path, encoding="utf-8") as file_handle:
-        return json.load(file_handle)  # Same as read_case_init; returns rules + game_constraints
+    path = Path(path)
+    try:
+        with open(path, encoding="utf-8") as file_handle:
+            data = json.load(file_handle)
+    except FileNotFoundError:
+        raise
+    except OSError as e:
+        raise OSError(f"Failed to read rules file {path}: {e}") from e
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Invalid JSON in rules file {path}: {e}") from e
+
+    if not isinstance(data, dict):
+        raise ValueError(f"rules file {path} must contain a JSON object (dict), got {type(data).__name__}")
+
+    return data
 
 
 # --- Logic: grounding and inference ---
