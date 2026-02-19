@@ -4,11 +4,15 @@ Run from project root:
     python -m unittest integration_tests.module_2.test_integration_module_2 -v
 
 This integration test writes its output to:
-    integration_tests/module_2/output_test_files/evidence_found_module_2.json
-    integration_tests/module_2/output_test_files/query_plan.json
-    integration_tests/module_2/output_test_files/observations.json
-    integration_tests/module_2/output_test_files/search_trace.txt
-so you can manually inspect the results after running it.
+    integration_tests/module_2/output_test_files/
+    
+Output files (consolidated in one directory):
+    - evidence_found.json (from module_1 and extended by module_2)
+    - query_plan.json (from module_2.run_search)
+    - observations.json (from module_2.run_search)
+    - search_trace.txt (from module_2.run_search)
+    
+You can manually inspect the results after running the tests.
 """
 
 import json
@@ -23,9 +27,6 @@ _MODULE_1_DIR = _THIS_DIR.parent / "module_1"
 _OUTPUT_DIR = _THIS_DIR / "output_test_files"
 _OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-# Where this test will write its evidence file.
-EVIDENCE_OUTPUT_PATH = _OUTPUT_DIR / "evidence_found_module_2.json"
-
 # Rules path; case data comes from module_1.run_random_case() (random case generation).
 RULES_PATH = _MODULE_1_DIR / "rules.json"
 
@@ -36,11 +37,10 @@ class TestModule2Integration(unittest.TestCase):
     def test_selects_witness_facts_and_writes_to_evidence_file(self) -> None:
         """module_2 should select some witness facts and record them in evidence_found.json."""
         # Use module_1.run_random_case() to generate a random case and get kb_evidence + witness_knowledge.
-        output_dir = _OUTPUT_DIR / "module1_then_module2_selection"
-        output_dir.mkdir(parents=True, exist_ok=True)
+        # Reuse main output directory to reduce file clutter
         case = module_1.run_random_case(
             rules_path=RULES_PATH,
-            output_dir=output_dir,
+            output_dir=_OUTPUT_DIR,
             seed=42,
             kb_ratio=0.4,
         )
@@ -70,7 +70,7 @@ class TestModule2Integration(unittest.TestCase):
                 self.assertIn(proposition_name, kb)
 
         # Write the evidence file (extend the one from module_1 or write fresh)
-        evidence_path = output_dir / "evidence_found.json"
+        evidence_path = _OUTPUT_DIR / "evidence_found.json"
         module_2.write_questions_to_evidence(
             evidence_path=evidence_path,
             questions=selected,
@@ -89,17 +89,15 @@ class TestModule2Integration(unittest.TestCase):
 
     def test_full_pipeline_module1_then_module2_extends_evidence_file(self) -> None:
         """Run module_1.run_random_case() then module_2: evidence_found.json can be extended by module_2."""
-        output_dir = _OUTPUT_DIR / "module1_then_module2_pipeline"
-        output_dir.mkdir(parents=True, exist_ok=True)
-
+        # Reuse main output directory
         # Module 1: generate random case and write evidence_found.json
         result = module_1.run_random_case(
             rules_path=RULES_PATH,
-            output_dir=output_dir,
+            output_dir=_OUTPUT_DIR,
             seed=99,
             kb_ratio=0.4,
         )
-        evidence_path = output_dir / "evidence_found.json"
+        evidence_path = _OUTPUT_DIR / "evidence_found.json"
         self.assertTrue(evidence_path.exists(), "module_1.run_random_case() should create evidence_found.json")
 
         with open(evidence_path, encoding="utf-8") as f:
@@ -128,27 +126,25 @@ class TestModule2Integration(unittest.TestCase):
     def test_beam_search_query_planning_produces_outputs(self) -> None:
         """module_2.run_search() should produce query_plan.json, observations.json, and search_trace.txt."""
         # Module 1: generate random case and write evidence_found.json
-        module1_output_dir = _OUTPUT_DIR / "beam_search_module1_output"
-        module1_output_dir.mkdir(parents=True, exist_ok=True)
+        # Reuse main output directory to reduce file clutter
         case = module_1.run_random_case(
             rules_path=RULES_PATH,
-            output_dir=module1_output_dir,
+            output_dir=_OUTPUT_DIR,
             seed=123,
             kb_ratio=0.4,
         )
-        evidence_path = module1_output_dir / "evidence_found.json"
+        evidence_path = _OUTPUT_DIR / "evidence_found.json"
         self.assertTrue(evidence_path.exists(), "module_1.run_random_case() should create evidence_found.json")
 
         witness_knowledge = case["witness_knowledge"]
         self.assertGreater(len(witness_knowledge), 0, "Expected some witness knowledge")
 
-        # Module 2: run beam search query planning
-        search_output_dir = _OUTPUT_DIR / "beam_search_outputs"
+        # Module 2: run beam search query planning (outputs go to same directory)
         result = module_2.run_search(
             evidence_path=evidence_path,
             witness_knowledge=witness_knowledge,
             query_budget=5,
-            output_dir=search_output_dir,
+            output_dir=_OUTPUT_DIR,
             beam_width=3,
         )
 
@@ -158,7 +154,7 @@ class TestModule2Integration(unittest.TestCase):
         self.assertIn("search_trace", result)
 
         # Check that query_plan.json exists and has correct structure
-        query_plan_path = search_output_dir / "query_plan.json"
+        query_plan_path = _OUTPUT_DIR / "query_plan.json"
         self.assertTrue(query_plan_path.exists(), "query_plan.json should be created")
         with open(query_plan_path, encoding="utf-8") as f:
             query_plan_data = json.load(f)
@@ -167,7 +163,7 @@ class TestModule2Integration(unittest.TestCase):
         self.assertLessEqual(len(query_plan_data["actions"]), 5, "Should respect query_budget")
 
         # Check that observations.json exists and has correct structure
-        observations_path = search_output_dir / "observations.json"
+        observations_path = _OUTPUT_DIR / "observations.json"
         self.assertTrue(observations_path.exists(), "observations.json should be created")
         with open(observations_path, encoding="utf-8") as f:
             observations_data = json.load(f)
@@ -180,7 +176,7 @@ class TestModule2Integration(unittest.TestCase):
         )
 
         # Check that search_trace.txt exists
-        search_trace_path = search_output_dir / "search_trace.txt"
+        search_trace_path = _OUTPUT_DIR / "search_trace.txt"
         self.assertTrue(search_trace_path.exists(), "search_trace.txt should be created")
         with open(search_trace_path, encoding="utf-8") as f:
             trace_content = f.read()
@@ -199,24 +195,22 @@ class TestModule2Integration(unittest.TestCase):
 
     def test_beam_search_explores_multiple_paths(self) -> None:
         """Beam search should keep multiple candidate states (beam_width > 1)."""
-        module1_output_dir = _OUTPUT_DIR / "beam_search_multipath_module1"
-        module1_output_dir.mkdir(parents=True, exist_ok=True)
+        # Reuse main output directory to reduce file clutter
         case = module_1.run_random_case(
             rules_path=RULES_PATH,
-            output_dir=module1_output_dir,
+            output_dir=_OUTPUT_DIR,
             seed=456,
             kb_ratio=0.4,
         )
-        evidence_path = module1_output_dir / "evidence_found.json"
+        evidence_path = _OUTPUT_DIR / "evidence_found.json"
         witness_knowledge = case["witness_knowledge"]
 
-        # Run with beam_width=3 to keep multiple paths
-        search_output_dir = _OUTPUT_DIR / "beam_search_multipath"
+        # Run with beam_width=3 to keep multiple paths (outputs go to same directory)
         result = module_2.run_search(
             evidence_path=evidence_path,
             witness_knowledge=witness_knowledge,
             query_budget=3,
-            output_dir=search_output_dir,
+            output_dir=_OUTPUT_DIR,
             beam_width=3,
         )
 
