@@ -1,0 +1,14 @@
+Beam search trace (Module 2)
+========================================
+
+Step 0 (candidates=17):
+  heuristics: [119.09077011870927, 119.07775313745839, 119.06723085274348]
+  queries: [['Weapon_Wrench_DiningRoom'], ['At_ColonelMustard_Study_8pm'], ['Weapon_LeadPipe_Kitchen']]
+
+Step 1 (candidates=51):
+  heuristics: [119.09241677461445, 119.09236402915506, 119.08554033188176]
+  queries: [['Weapon_LeadPipe_Kitchen', 'At_ColonelMustard_Study_8pm'], ['At_ColonelMustard_Study_8pm', 'At_ColonelMustard_Study_10pm'], ['At_ColonelMustard_Study_8pm', 'Weapon_Dagger_Ballroom']]
+
+Step 2 (candidates=51):
+  heuristics: [119.09948420840941, 119.09699198133727, 119.09667385582381]
+  queries: [['Weapon_LeadPipe_Kitchen', 'At_ColonelMustard_Study_8pm', 'KeyFound_Study'], ['At_ColonelMustard_Study_8pm', 'Weapon_Dagger_Ballroom', 'Weapon_LeadPipe_Kitchen'], ['Weapon_LeadPipe_Kitchen', 'At_ColonelMustard_Study_8pm', 'Fingerprints_Conservatory_MrGreen']]

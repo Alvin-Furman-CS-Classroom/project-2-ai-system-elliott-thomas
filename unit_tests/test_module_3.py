@@ -9,8 +9,9 @@ from pathlib import Path
 
 from src import module_3
 
-# Paths to integration test data (run tests from project root)
-EVIDENCE_PATH = Path("integration_tests/module_1/output_test_files/evidence_found.json")
+# Paths to integration test data (run tests from project root).
+# evidence_found.json is written by module_1.run() under case_inits/output_test_files/
+EVIDENCE_PATH = Path("integration_tests/module_1/case_inits/output_test_files/evidence_found.json")
 RULES_PATH = Path("integration_tests/module_1/rules.json")
 
 
@@ -143,7 +144,7 @@ class TestCreateFolPropositions(unittest.TestCase):
     def test_writes_to_output_path_when_provided(self) -> None:
         """When output_path is provided, FOL propositions should be written as JSON."""
         evidence = {"VictimFound_Study": True}
-        output_path = Path("integration_tests/module_1/output_test_files/test_kb_fol_output.json")
+        output_path = Path("integration_tests/module_3/output_test_files/test_kb_fol_output.json")
         output_path.parent.mkdir(parents=True, exist_ok=True)
         module_3.create_fol_propositions(evidence, output_path=output_path)
         self.assertTrue(output_path.exists())
@@ -287,7 +288,7 @@ class TestWriteInferredFacts(unittest.TestCase):
 
     def test_writes_json_with_inferred_facts_key(self) -> None:
         """write_inferred_facts should write JSON with inferred_facts array."""
-        output_path = Path("integration_tests/module_1/output_test_files/test_inferred_output.json")
+        output_path = Path("integration_tests/module_3/output_test_files/test_inferred_output.json")
         output_path.parent.mkdir(parents=True, exist_ok=True)
         inferred = [
             {"fact": {"predicate": "ForcedEntry", "args": ["Study", "9pm"]}, "rule_id": "R001", "variable_bindings": {}},
@@ -311,8 +312,10 @@ class TestRun(unittest.TestCase):
         """run() should produce inferred_facts when given output paths."""
         if not EVIDENCE_PATH.exists():
             self.skipTest(f"Evidence file not found: {EVIDENCE_PATH}")
-        kb_path = Path("integration_tests/module_1/output_test_files/test_run_kb_fol.json")
-        inf_path = Path("integration_tests/module_1/output_test_files/test_run_inferred.json")
+        kb_path = Path("integration_tests/module_3/output_test_files/test_run_kb_fol.json")
+        inf_path = Path("integration_tests/module_3/output_test_files/test_run_inferred.json")
+        kb_path.parent.mkdir(parents=True, exist_ok=True)
+        inf_path.parent.mkdir(parents=True, exist_ok=True)
         result = module_3.run(EVIDENCE_PATH, RULES_PATH, kb_fol_path=kb_path, inferred_facts_path=inf_path)
         self.assertIn("fol_propositions", result)
         self.assertIn("inferred_facts", result)

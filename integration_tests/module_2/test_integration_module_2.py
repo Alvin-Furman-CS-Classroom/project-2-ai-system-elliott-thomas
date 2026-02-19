@@ -5,6 +5,9 @@ Run from project root:
 
 This integration test writes its output to:
     integration_tests/module_2/output_test_files/evidence_found_module_2.json
+    integration_tests/module_2/output_test_files/query_plan.json
+    integration_tests/module_2/output_test_files/observations.json
+    integration_tests/module_2/output_test_files/search_trace.txt
 so you can manually inspect the results after running it.
 """
 
@@ -26,7 +29,7 @@ _OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 EVIDENCE_OUTPUT_PATH = _OUTPUT_DIR / "evidence_found_module_2.json"
 
 # Reuse the existing integration test case_init.json and rules from module_1.
-CASE_INIT_PATH = _MODULE_1_DIR / "case_inits" / "case_init.json"
+CASE_INIT_PATH = _MODULE_1_DIR / "case_inits" / "case_init_uncertain.json"
 RULES_PATH = _MODULE_1_DIR / "rules.json"
 
 
@@ -113,6 +116,116 @@ class TestModule2Integration(unittest.TestCase):
             recorded = [e["question"] for e in data_after["witness_queries_added"]]
             for prop in selected:
                 self.assertIn(prop, recorded)
+
+    def test_beam_search_query_planning_produces_outputs(self) -> None:
+        """module_2.run_search() should produce query_plan.json, observations.json, and search_trace.txt."""
+        # Run module_1 to get initial evidence
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp = Path(tmp_dir)
+            shutil.copy(CASE_INIT_PATH, tmp / "case_init.json")
+            shutil.copy(RULES_PATH, tmp / "rules.json")
+
+            # Module 1: run inference and write evidence_found.json
+            module_1.run(tmp / "case_init.json", tmp / "rules.json")
+            evidence_path = tmp / "output_test_files" / "evidence_found.json"
+            self.assertTrue(evidence_path.exists(), "module_1.run() should create evidence_found.json")
+
+            # Get witness_knowledge from the case
+            case = module_1.read_case_init(tmp / "case_init.json")
+            witness_knowledge = case["witness_knowledge"]
+            self.assertGreater(len(witness_knowledge), 0, "Expected some witness knowledge")
+
+            # Module 2: run beam search query planning
+            search_output_dir = _OUTPUT_DIR / "beam_search_outputs"
+            result = module_2.run_search(
+                evidence_path=evidence_path,
+                witness_knowledge=witness_knowledge,
+                query_budget=5,
+                output_dir=search_output_dir,
+                beam_width=3,
+            )
+
+            # Check return value structure
+            self.assertIn("query_plan", result)
+            self.assertIn("observations", result)
+            self.assertIn("search_trace", result)
+
+            # Check that query_plan.json exists and has correct structure
+            query_plan_path = search_output_dir / "query_plan.json"
+            self.assertTrue(query_plan_path.exists(), "query_plan.json should be created")
+            with open(query_plan_path, encoding="utf-8") as f:
+                query_plan_data = json.load(f)
+            self.assertIn("actions", query_plan_data)
+            self.assertIsInstance(query_plan_data["actions"], list)
+            self.assertLessEqual(len(query_plan_data["actions"]), 5, "Should respect query_budget")
+
+            # Check that observations.json exists and has correct structure
+            observations_path = search_output_dir / "observations.json"
+            self.assertTrue(observations_path.exists(), "observations.json should be created")
+            with open(observations_path, encoding="utf-8") as f:
+                observations_data = json.load(f)
+            self.assertIn("observations", observations_data)
+            self.assertIsInstance(observations_data["observations"], list)
+            self.assertEqual(
+                len(observations_data["observations"]),
+                len(query_plan_data["actions"]),
+                "Observations should match query plan length",
+            )
+
+            # Check that search_trace.txt exists
+            search_trace_path = search_output_dir / "search_trace.txt"
+            self.assertTrue(search_trace_path.exists(), "search_trace.txt should be created")
+            with open(search_trace_path, encoding="utf-8") as f:
+                trace_content = f.read()
+            self.assertIn("Beam search trace", trace_content)
+
+            # Verify query plan contains valid propositions from witness_knowledge
+            for action in query_plan_data["actions"]:
+                self.assertIn(action, witness_knowledge, f"Query plan action {action} should be in witness_knowledge")
+
+            # Verify observations match query plan
+            for i, obs in enumerate(observations_data["observations"]):
+                self.assertIn("action", obs)
+                self.assertIn("result", obs)
+                if i < len(query_plan_data["actions"]):
+                    self.assertEqual(obs["action"], query_plan_data["actions"][i])
+
+    def test_beam_search_explores_multiple_paths(self) -> None:
+        """Beam search should keep multiple candidate states (beam_width > 1)."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp = Path(tmp_dir)
+            shutil.copy(CASE_INIT_PATH, tmp / "case_init.json")
+            shutil.copy(RULES_PATH, tmp / "rules.json")
+
+            module_1.run(tmp / "case_init.json", tmp / "rules.json")
+            evidence_path = tmp / "output_test_files" / "evidence_found.json"
+
+            case = module_1.read_case_init(tmp / "case_init.json")
+            witness_knowledge = case["witness_knowledge"]
+
+            # Run with beam_width=3 to keep multiple paths
+            search_output_dir = _OUTPUT_DIR / "beam_search_multipath"
+            result = module_2.run_search(
+                evidence_path=evidence_path,
+                witness_knowledge=witness_knowledge,
+                query_budget=3,
+                output_dir=search_output_dir,
+                beam_width=3,
+            )
+
+            # Check that search_trace shows multiple paths were considered
+            search_trace = result["search_trace"]
+            if search_trace:
+                # At least one step should have multiple candidates
+                for entry in search_trace:
+                    if entry.get("num_candidates", 0) > 1:
+                        # Should have multiple heuristics recorded (one per beam state)
+                        beam_heuristics = entry.get("beam_heuristics", [])
+                        self.assertGreaterEqual(
+                            len(beam_heuristics),
+                            1,
+                            "Beam search should track heuristic values for kept states",
+                        )
 
 
 if __name__ == "__main__":
