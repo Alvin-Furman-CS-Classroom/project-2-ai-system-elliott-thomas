@@ -2,11 +2,7 @@
 # build KB, ground rules, infer) and check that the module behaves correctly as a whole.
 #
 # Run from project root: python -m unittest integration_tests.module_1.test_integration_module_1 -v
-#
-# Output files written to: integration_tests/module_1/output_test_files/
-#   - evidence_found.json: KB after inference
-#   - questionable_evidence_report.txt: Contradiction report
-#   - case_init_generated.json: Generated case_init (all facts) for review
+
 
 import json
 import unittest
@@ -19,22 +15,6 @@ CASE_INIT_PATH = _THIS_DIR / "case_inits" / "case_init_uncertain.json"
 RULES_PATH = _THIS_DIR / "rules.json"
 _OUTPUT_DIR = _THIS_DIR / "output_test_files"
 _OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-
-
-# OLD CODE (file-based tests) - COMMENTED OUT TO HIGHLIGHT NEW RANDOM CASE GENERATION
-# class TestRun(unittest.TestCase):
-#     """Tests for module_1.run (entry point: read_case_init + read_rules + future inference/output)."""
-#
-#     def test_accepts_paths_and_does_not_raise(self):
-#         """run(case_init_path, rules_path) should not raise when given valid integration test paths."""
-#         # We are testing that run completes without error when given valid Path objects to the integration test files.
-#         module_1.run(CASE_INIT_PATH, RULES_PATH)
-#
-#     def test_accepts_string_paths(self):
-#         """run should accept str paths as well as Path objects."""
-#         # We are testing that run accepts string paths in addition to pathlib Path objects.
-#         module_1.run(str(CASE_INIT_PATH), str(RULES_PATH))
-
 
 # NEW CODE: Random case generation tests
 class TestRunRandomCase(unittest.TestCase):
