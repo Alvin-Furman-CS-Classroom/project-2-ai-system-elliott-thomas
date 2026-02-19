@@ -1,5 +1,0 @@
-Questionable Evidence Report
-==========================
-
-Contradiction detected: False
-Total propositions (true): 13
