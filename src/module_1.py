@@ -32,52 +32,52 @@ _PLACEHOLDER_TO_KEY = {
 
 # --- Read methods ---
 
-
-def read_case_init(path: str | Path) -> dict:
-    """Load case initial data from a JSON file and split into two equal-sized dicts.
-
-    Reads the evidence dictionary (from "initial_evidence" key), randomly assigns
-    each (proposition, value) pair to one of two dicts, and returns both.
-    The second dict (witness_knowledge) is not used yet.
-
-    Args:
-        path: File path to case_init.json (str or Path).
-
-    Returns:
-        dict with keys kb_evidence, witness_knowledge, metadata. kb_evidence and
-        witness_knowledge are equal-sized (or differ by one) random splits.
-
-    Raises:
-        FileNotFoundError: If the file does not exist.
-        ValueError: If the file exists but is not valid JSON or has unexpected structure.
-    """
-    path = Path(path)
-    try:
-        with open(path, encoding="utf-8") as file_handle:
-            raw = json.load(file_handle)
-    except FileNotFoundError:
-        raise
-    except OSError as e:
-        raise OSError(f"Failed to read case_init file {path}: {e}") from e
-    except json.JSONDecodeError as e:
-        raise ValueError(f"Invalid JSON in case_init file {path}: {e}") from e
-
-    if not isinstance(raw, dict):
-        raise ValueError(f"case_init file {path} must contain a JSON object (dict), got {type(raw).__name__}")
-
-    evidence = raw.get("initial_evidence", raw)
-    if not isinstance(evidence, dict):
-        evidence = {}
-    items = list(evidence.items())
-    random.shuffle(items)
-    mid = len(items) // 2
-    kb_evidence = dict(items[:mid])
-    witness_knowledge = dict(items[mid:])
-    return {
-        "metadata": raw.get("metadata", {}),
-        "kb_evidence": kb_evidence,
-        "witness_knowledge": witness_knowledge,
-    }
+# OLD CODE (file-based case initialization) - COMMENTED OUT TO HIGHLIGHT NEW RANDOM CASE GENERATION
+# def read_case_init(path: str | Path) -> dict:
+#     """Load case initial data from a JSON file and split into two equal-sized dicts.
+#
+#     Reads the evidence dictionary (from "initial_evidence" key), randomly assigns
+#     each (proposition, value) pair to one of two dicts, and returns both.
+#     The second dict (witness_knowledge) is not used yet.
+#
+#     Args:
+#         path: File path to case_init.json (str or Path).
+#
+#     Returns:
+#         dict with keys kb_evidence, witness_knowledge, metadata. kb_evidence and
+#         witness_knowledge are equal-sized (or differ by one) random splits.
+#
+#     Raises:
+#         FileNotFoundError: If the file does not exist.
+#         ValueError: If the file exists but is not valid JSON or has unexpected structure.
+#     """
+#     path = Path(path)
+#     try:
+#         with open(path, encoding="utf-8") as file_handle:
+#             raw = json.load(file_handle)
+#     except FileNotFoundError:
+#         raise
+#     except OSError as e:
+#         raise OSError(f"Failed to read case_init file {path}: {e}") from e
+#     except json.JSONDecodeError as e:
+#         raise ValueError(f"Invalid JSON in case_init file {path}: {e}") from e
+#
+#     if not isinstance(raw, dict):
+#         raise ValueError(f"case_init file {path} must contain a JSON object (dict), got {type(raw).__name__}")
+#
+#     evidence = raw.get("initial_evidence", raw)
+#     if not isinstance(evidence, dict):
+#         evidence = {}
+#     items = list(evidence.items())
+#     random.shuffle(items)
+#     mid = len(items) // 2
+#     kb_evidence = dict(items[:mid])
+#     witness_knowledge = dict(items[mid:])
+#     return {
+#         "metadata": raw.get("metadata", {}),
+#         "kb_evidence": kb_evidence,
+#         "witness_knowledge": witness_knowledge,
+#     }
 
 
 def read_rules(path: str | Path) -> dict:
@@ -451,7 +451,7 @@ def has_contradiction(kb: dict) -> bool:
 
 # --- Entry point ---
 
-
+# NEW CODE: Random case generation (Clue-style initialization)
 def run_random_case(
     rules_path: str | Path,
     output_dir: str | Path,
@@ -466,8 +466,10 @@ def run_random_case(
 
     Args:
         rules_path: Path to rules.json.
-        output_dir: Directory where evidence_found.json and questionable_evidence_report.txt
-            will be written.
+        output_dir: Directory where output files will be written:
+            - evidence_found.json: KB after inference
+            - questionable_evidence_report.txt: Contradiction report
+            - case_init_generated.json: Generated case_init (kb_evidence + witness_knowledge) for review
         seed: Optional random seed for reproducibility.
         kb_ratio: Fraction of facts to put in kb_evidence.
         murder_time: Optional specific time for murder.
@@ -513,58 +515,69 @@ def run_random_case(
                 f.write(f"    and be culprit at same time\n")
                 f.write(f"    Grounded premises: {premises}\n")
 
+    # Write the generated case_init.json for review (combines kb_evidence and witness_knowledge)
+    case_init_path = output_dir / "case_init_generated.json"
+    initial_evidence = {**case["kb_evidence"], **case["witness_knowledge"]}
+    case_init_data = {
+        "initial_evidence": initial_evidence,
+        "metadata": case["metadata"],
+    }
+    with open(case_init_path, "w", encoding="utf-8") as f:
+        json.dump(case_init_data, f, indent=2)
+
     return case
 
 
-def run(case_init_path: str | Path, rules_path: str | Path) -> None:
-    """Read inputs, build KB, run inference, and write evidence_found.json and questionable_evidence_report.txt.
-
-    Output files are written to a subdirectory output_test_files under the same directory as case_init_path.
-
-    Args:
-        case_init_path: Path to case_init.json.
-        rules_path: Path to rules.json.
-
-    Returns:
-        None.
-    """
-    case = read_case_init(case_init_path)
-    rules = read_rules(rules_path)
-    kb = build_kb(case["kb_evidence"])
-    all_rules = ground_all_rules(rules["rules"], rules["game_constraints"])
-    infer(kb, all_rules)
-    contradiction_found = has_contradiction(kb)
-
-    # Write outputs next to case_init (in output_test_files subdir).
-    out_dir = Path(case_init_path).parent
-    output_subdir = out_dir / "output_test_files"
-    output_subdir.mkdir(parents=True, exist_ok=True)  # Create dir if it doesn't exist.
-    evidence_path = output_subdir / "evidence_found.json"
-    report_path = output_subdir / "questionable_evidence_report.txt"
-
-    # KB may contain CONTRADICTION and _CONTRADICTION_GROUNDED_RULES; exclude from evidence output.
-    evidence_propositions = {
-        proposition_name: True
-        for proposition_name in kb
-        if proposition_name not in (_CONTRADICTION_KEY, _CONTRADICTION_GROUNDED_RULES_KEY)
-    }
-    with open(evidence_path, "w", encoding="utf-8") as evidence_file:
-        json.dump({"evidence": evidence_propositions, "metadata": case.get("metadata", {})}, evidence_file, indent=2)
-
-    # Build id -> description map from rules for the report.
-    rule_id_to_description = {r["id"]: r.get("description", "") for r in rules["rules"]}
-
-    with open(report_path, "w", encoding="utf-8") as report_file:
-        report_file.write("Questionable Evidence Report\n")
-        report_file.write("==========================\n\n")
-        report_file.write(f"Contradiction detected: {contradiction_found}\n")
-        report_file.write(f"Total propositions (true): {len(evidence_propositions)}\n")
-        if contradiction_found:
-            report_file.write("\nGrounded rules that produced a contradiction:\n")
-            for gr in kb.get(_CONTRADICTION_GROUNDED_RULES_KEY, []):
-                rule_id = gr.get("id", "?")
-                description = rule_id_to_description.get(rule_id, "(no description)")
-                premises = ", ".join(gr.get("if", []))
-                report_file.write(f"  - {rule_id}: {description}\n")
-                report_file.write(f"    Grounded premises: {premises}\n")
-    return None
+# OLD CODE (file-based run function) - COMMENTED OUT TO HIGHLIGHT NEW RANDOM CASE GENERATION
+# def run(case_init_path: str | Path, rules_path: str | Path) -> None:
+#     """Read inputs, build KB, run inference, and write evidence_found.json and questionable_evidence_report.txt.
+#
+#     Output files are written to a subdirectory output_test_files under the same directory as case_init_path.
+#
+#     Args:
+#         case_init_path: Path to case_init.json.
+#         rules_path: Path to rules.json.
+#
+#     Returns:
+#         None.
+#     """
+#     case = read_case_init(case_init_path)
+#     rules = read_rules(rules_path)
+#     kb = build_kb(case["kb_evidence"])
+#     all_rules = ground_all_rules(rules["rules"], rules["game_constraints"])
+#     infer(kb, all_rules)
+#     contradiction_found = has_contradiction(kb)
+#
+#     # Write outputs next to case_init (in output_test_files subdir).
+#     out_dir = Path(case_init_path).parent
+#     output_subdir = out_dir / "output_test_files"
+#     output_subdir.mkdir(parents=True, exist_ok=True)  # Create dir if it doesn't exist.
+#     evidence_path = output_subdir / "evidence_found.json"
+#     report_path = output_subdir / "questionable_evidence_report.txt"
+#
+#     # KB may contain CONTRADICTION and _CONTRADICTION_GROUNDED_RULES; exclude from evidence output.
+#     evidence_propositions = {
+#         proposition_name: True
+#         for proposition_name in kb
+#         if proposition_name not in (_CONTRADICTION_KEY, _CONTRADICTION_GROUNDED_RULES_KEY)
+#     }
+#     with open(evidence_path, "w", encoding="utf-8") as evidence_file:
+#         json.dump({"evidence": evidence_propositions, "metadata": case.get("metadata", {})}, evidence_file, indent=2)
+#
+#     # Build id -> description map from rules for the report.
+#     rule_id_to_description = {r["id"]: r.get("description", "") for r in rules["rules"]}
+#
+#     with open(report_path, "w", encoding="utf-8") as report_file:
+#         report_file.write("Questionable Evidence Report\n")
+#         report_file.write("==========================\n\n")
+#         report_file.write(f"Contradiction detected: {contradiction_found}\n")
+#         report_file.write(f"Total propositions (true): {len(evidence_propositions)}\n")
+#         if contradiction_found:
+#             report_file.write("\nGrounded rules that produced a contradiction:\n")
+#             for gr in kb.get(_CONTRADICTION_GROUNDED_RULES_KEY, []):
+#                 rule_id = gr.get("id", "?")
+#                 description = rule_id_to_description.get(rule_id, "(no description)")
+#                 premises = ", ".join(gr.get("if", []))
+#                 report_file.write(f"  - {rule_id}: {description}\n")
+#                 report_file.write(f"    Grounded premises: {premises}\n")
+#     return None
