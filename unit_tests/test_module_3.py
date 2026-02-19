@@ -10,8 +10,8 @@ from pathlib import Path
 from src import module_3
 
 # Paths to integration test data (run tests from project root).
-# evidence_found.json is written by module_1.run() under case_inits/output_test_files/
-EVIDENCE_PATH = Path("integration_tests/module_1/case_inits/output_test_files/evidence_found.json")
+# evidence_found.json is written by module_1 (run_random_case) or module_2 under output_test_files/
+EVIDENCE_PATH = Path("integration_tests/module_1/output_test_files/evidence_found.json")
 RULES_PATH = Path("integration_tests/module_1/rules.json")
 
 

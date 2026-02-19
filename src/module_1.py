@@ -60,6 +60,53 @@ def read_rules(path: str | Path) -> dict:
     return data
 
 
+def read_case_init(path: str | Path) -> dict:
+    """Load case initialization from a JSON file.
+
+    Args:
+        path: File path to case_init.json (str or Path).
+
+    Returns:
+        dict with keys kb_evidence, witness_knowledge, metadata.
+        File format may have initial_evidence (all facts); that is returned as kb_evidence
+        with witness_knowledge empty (witness facts are for runtime queries).
+
+    Raises:
+        FileNotFoundError: If the file does not exist.
+        ValueError: If the file exists but is not valid JSON or has unexpected structure.
+    """
+    path = Path(path)
+    try:
+        with open(path, encoding="utf-8") as file_handle:
+            data = json.load(file_handle)
+    except FileNotFoundError:
+        raise
+    except OSError as e:
+        raise OSError(f"Failed to read case init file {path}: {e}") from e
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Invalid JSON in case init file {path}: {e}") from e
+
+    if not isinstance(data, dict):
+        raise ValueError(
+            f"case init file {path} must contain a JSON object (dict), got {type(data).__name__}"
+        )
+
+    initial = data.get("initial_evidence", data.get("kb_evidence", {}))
+    metadata = data.get("metadata", {})
+    # If file has both kb_evidence and witness_knowledge, use them; else treat all as kb_evidence.
+    kb_evidence = data.get("kb_evidence", initial)
+    witness_knowledge = data.get("witness_knowledge", {})
+    if not kb_evidence and initial:
+        kb_evidence = dict(initial)
+        witness_knowledge = {}
+
+    return {
+        "kb_evidence": kb_evidence,
+        "witness_knowledge": witness_knowledge,
+        "metadata": metadata,
+    }
+
+
 # --- Random case generation (Clue-style) ---
 
 
