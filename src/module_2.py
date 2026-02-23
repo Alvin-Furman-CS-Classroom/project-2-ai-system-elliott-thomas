@@ -1,9 +1,7 @@
 """Module 2: Informed search for next best query (witness knowledge selection).
 
-This module picks which witness facts to "ask" next and adds them to the
-knowledge base. It started as a simple priority-based selector and now also
-includes a lightweight search-based planner that explores multiple query
-sequences using a beam-search style heuristic.
+This module uses beam search to plan which witness facts to "ask" next and
+produces a query plan, observations, and search trace for downstream modules.
 """
 # Thomas Corbin and Elliott Chmil
 # Written with the help of Cursor Agent
@@ -12,12 +10,6 @@ import json
 import random
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
-
-# How many witness facts to select when n is not specified (avoids magic number in signature).
-DEFAULT_NUM_FACTS_TO_SELECT = 5
-
-# Key written to evidence_found.json for the list of witness queries we added.
-_EVIDENCE_KEY_WITNESS_QUERIES = "witness_queries_added"
 
 # Order of proposition prefixes: earlier in the list = higher priority to query.
 # Goal: Identify culprit, weapon, and room. Prioritize queries that directly help
@@ -36,8 +28,10 @@ _QUERY_PRIORITY = (
     "KeyFound_",
 )
 
-
-# --- Scoring and simple selection (existing behavior) ---
+# Heuristic weights for beam search (avoid magic numbers).
+_HEURISTIC_GOAL_PROGRESS = 100.0  # Score per goal element (culprit, weapon, room) already identified
+_HEURISTIC_GOAL_BOOST = 3.0  # Extra multiplier for queries that would fill a missing goal element
+_HEURISTIC_TIE_BREAKER_MAX = 0.1  # Max random jitter to break ties
 
 
 def get_priority_score(proposition: str) -> int:
@@ -51,52 +45,6 @@ def get_priority_score(proposition: str) -> int:
             # Earlier in list -> higher score (we use length - index so first = highest).
             return len(_QUERY_PRIORITY) - index
     return 0
-
-
-def select_and_add_witness_facts(
-    kb: Dict[str, bool],
-    witness_knowledge: Dict[str, bool],
-    rules_path: str | Path | None = None,
-    n: int = DEFAULT_NUM_FACTS_TO_SELECT,
-) -> List[str]:
-    """Choose n facts from witness_knowledge to query, add them to the KB, and return the list.
-
-    Uses a heuristic: we rank facts by type (alibi, location, weapon, etc.) and
-    pick the top n. Only propositions with value True are added to the KB
-    (same as module_1: KB stores only True).
-
-    This function preserves the original, deterministic behavior used for
-    Checkpoint 1 and existing tests.
-
-    Args:
-        kb: Knowledge base dict (updated in place).
-        witness_knowledge: Dict of proposition name -> bool (facts not yet in kb).
-        rules_path: Optional path to rules.json; reserved for future use.
-        n: How many facts to select (default 5).
-
-    Returns:
-        List of the n proposition names that were selected (and added to kb if True).
-    """
-    if not witness_knowledge or n <= 0:
-        return []
-
-    # Score each proposition; higher score = we want to query it sooner.
-    scored_propositions: List[Tuple[str, int]] = [
-        (proposition, get_priority_score(proposition))
-        for proposition in witness_knowledge
-    ]
-    # Sort by score descending; use proposition name to break ties.
-    scored_propositions.sort(key=lambda item: (-item[1], item[0]))
-
-    # Take the top n proposition names.
-    selected = [proposition for proposition, _ in scored_propositions[:n]]
-
-    # Add selected facts to the KB only when their value is True (KB stores only True).
-    for proposition in selected:
-        if witness_knowledge.get(proposition) is True:
-            kb[proposition] = True
-
-    return selected
 
 
 # --- Search-based query planning (beam search with softer heuristics) ---
@@ -132,7 +80,6 @@ def _is_goal_state(kb: Dict[str, bool]) -> bool:
 def _heuristic_value(
     kb: Dict[str, bool],
     witness_knowledge: Dict[str, bool],
-    rules_path: str | Path | None = None,
 ) -> float:
     """Estimate the value of the current KB state.
 
@@ -145,7 +92,6 @@ def _heuristic_value(
     Args:
         kb: Current knowledge base (dict of proposition -> True).
         witness_knowledge: Dict of proposition -> bool (all available facts).
-        rules_path: Optional path to rules.json; reserved for future use.
 
     Returns:
         Heuristic value (higher is better).
@@ -165,11 +111,11 @@ def _heuristic_value(
     # Base score: reward progress toward goal
     goal_progress = 0.0
     if has_culprit:
-        goal_progress += 100.0
+        goal_progress += _HEURISTIC_GOAL_PROGRESS
     if has_murder_location:
-        goal_progress += 100.0
+        goal_progress += _HEURISTIC_GOAL_PROGRESS
     if has_weapon:
-        goal_progress += 100.0
+        goal_progress += _HEURISTIC_GOAL_PROGRESS
 
     # Remaining queries that help identify goal elements get higher weight
     remaining = [
@@ -184,17 +130,17 @@ def _heuristic_value(
         base_score = get_priority_score(prop)
         # Extra boost for goal-related queries
         if prop.startswith("Culprit_") and not has_culprit:
-            goal_related_score += base_score * 3.0
+            goal_related_score += base_score * _HEURISTIC_GOAL_BOOST
         elif prop.startswith("MurderLocation_") and not has_murder_location:
-            goal_related_score += base_score * 3.0
+            goal_related_score += base_score * _HEURISTIC_GOAL_BOOST
         elif prop.startswith("Weapon_") and not has_weapon:
-            goal_related_score += base_score * 3.0
+            goal_related_score += base_score * _HEURISTIC_GOAL_BOOST
         else:
             goal_related_score += base_score
 
     total_score = goal_progress + goal_related_score
     # Small random term to break ties and encourage exploration.
-    return float(total_score) + random.random() * 0.1
+    return float(total_score) + random.random() * _HEURISTIC_TIE_BREAKER_MAX
 
 
 def beam_search_query_planning(
@@ -202,7 +148,6 @@ def beam_search_query_planning(
     witness_knowledge: Dict[str, bool],
     query_budget: int,
     beam_width: int = 3,
-    rules_path: str | Path | None = None,
 ) -> Tuple[List[str], List[Dict[str, Any]], List[Dict[str, Any]]]:
     """Plan a sequence of queries using a simple beam search.
 
@@ -224,7 +169,6 @@ def beam_search_query_planning(
         witness_knowledge: Dict of proposition -> bool (all available facts to query).
         query_budget: Maximum number of queries to plan.
         beam_width: How many states to keep at each search step.
-        rules_path: Optional path to rules.json; reserved for future use.
 
     Returns:
         (query_plan, observations, search_trace)
@@ -290,7 +234,7 @@ def beam_search_query_planning(
                 new_observations = observations + [
                     {"action": prop, "result": value}
                 ]
-                h = _heuristic_value(new_kb, witness_knowledge, rules_path)
+                h = _heuristic_value(new_kb, witness_knowledge)
                 candidates.append((h, new_kb, new_queries, new_observations))
 
         if not candidates:
@@ -377,15 +321,11 @@ def run_search(
     query_budget: int,
     output_dir: str | Path,
     beam_width: int = 3,
-    rules_path: str | Path | None = None,
 ) -> Dict[str, Any]:
     """Entry point: run beam-search-based query planning and write outputs.
 
     Goal: Identify culprit, weapon, and room. The search prioritizes queries that
     help identify these three elements and stops early when the goal is reached.
-
-    This leaves the original priority-based helpers untouched and adds a more
-    search-like mode that better matches the project proposal.
 
     Args:
         evidence_path: Path to evidence_found.json (from module_1 / module_2).
@@ -394,14 +334,21 @@ def run_search(
         output_dir: Directory where query_plan.json, observations.json, and
             search_trace.txt will be written.
         beam_width: How many states to keep at each search step.
-        rules_path: Optional path to rules.json; reserved for future use.
 
     Returns:
         Dict with keys query_plan, observations, search_trace, goal_reached.
     """
     evidence_path = Path(evidence_path)
-    with open(evidence_path, encoding="utf-8") as f:
-        data = json.load(f)
+    try:
+        with open(evidence_path, encoding="utf-8") as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        raise FileNotFoundError(f"Evidence file not found: {evidence_path}") from None
+    except OSError as e:
+        raise OSError(f"Failed to read evidence file {evidence_path}: {e}") from e
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Invalid JSON in evidence file {evidence_path}: {e}") from e
+
     initial_kb = data.get("evidence", {})
 
     query_plan, observations, search_trace = beam_search_query_planning(
@@ -409,7 +356,6 @@ def run_search(
         witness_knowledge=witness_knowledge,
         query_budget=query_budget,
         beam_width=beam_width,
-        rules_path=rules_path,
     )
 
     # Check if goal was reached
@@ -428,50 +374,3 @@ def run_search(
         "goal_reached": goal_reached,
     }
 
-
-# --- Writing evidence output (existing behavior) ---
-
-
-def write_questions_to_evidence(
-    evidence_path: str | Path,
-    questions: List[str],
-    witness_knowledge: Dict[str, bool],
-) -> None:
-    """Write the questions we added (and their values) into evidence_found.json.
-
-    Reads the existing file, adds a "witness_queries_added" key with a list of
-    {question, value} entries, then writes the file back.
-
-    Args:
-        evidence_path: Path to evidence_found.json.
-        questions: List of proposition names that were queried and added to the KB.
-        witness_knowledge: Dict mapping proposition -> bool (where we get the values).
-    """
-    path = Path(evidence_path)
-    data: Dict[str, Any] = {}
-    if path.exists():
-        try:
-            with open(path, encoding="utf-8") as file_handle:
-                data = json.load(file_handle)
-        except OSError as e:
-            raise OSError(f"Failed to read evidence file {path}: {e}") from e
-        except json.JSONDecodeError as e:
-            raise ValueError(f"Invalid JSON in evidence file {path}: {e}") from e
-        if not isinstance(data, dict):
-            raise ValueError(
-                f"evidence file {path} must contain a JSON object (dict), "
-                f"got {type(data).__name__}"
-            )
-
-    # Build the list of {question, value} for each selected question.
-    queries_added = [
-        {"question": question, "value": witness_knowledge.get(question)}
-        for question in questions
-    ]
-    data[_EVIDENCE_KEY_WITNESS_QUERIES] = queries_added
-
-    try:
-        with open(path, "w", encoding="utf-8") as file_handle:
-            json.dump(data, file_handle, indent=2)
-    except OSError as e:
-        raise OSError(f"Failed to write evidence file {path}: {e}") from e

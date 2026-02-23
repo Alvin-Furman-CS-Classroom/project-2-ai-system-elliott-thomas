@@ -109,6 +109,14 @@ def read_case_init(path: str | Path) -> dict:
 
 # --- Random case generation (Clue-style) ---
 
+# Probability thresholds for random case generation (avoid magic numbers).
+_FINGERPRINT_PROB = 0.3  # P(no fingerprints) when person was in room
+_DOOR_LOCKED_MURDER_ROOM = 0.2  # P(door not locked) in murder room at murder time
+_DOOR_LOCKED_OTHER = 0.7  # P(door not locked) elsewhere
+_NOISE_HEARD_MURDER_ROOM = 0.3  # P(no noise) in murder room at murder time
+_NOISE_HEARD_OTHER = 0.8  # P(no noise) elsewhere
+_KEY_FOUND_PROB = 0.8  # P(no key found) in a room
+
 
 def generate_random_case(
     rules_path: str | Path,
@@ -215,27 +223,27 @@ def generate_random_case(
                 person_locations.get((person, t)) == r for t in time_points
             )
             # Higher probability if they were there, but not guaranteed
-            all_facts[f"Fingerprints_{r}_{person}"] = was_there and random.random() > 0.3
+            all_facts[f"Fingerprints_{r}_{person}"] = was_there and random.random() > _FINGERPRINT_PROB
 
     # DoorLocked: random, but more likely in murder room at murder time
     for r in rooms:
         for t in time_points:
             if r == room and t == murder_time:
-                all_facts[f"DoorLocked_{r}_{t}"] = random.random() > 0.2  # 80% chance
+                all_facts[f"DoorLocked_{r}_{t}"] = random.random() > _DOOR_LOCKED_MURDER_ROOM
             else:
-                all_facts[f"DoorLocked_{r}_{t}"] = random.random() > 0.7  # 30% chance
+                all_facts[f"DoorLocked_{r}_{t}"] = random.random() > _DOOR_LOCKED_OTHER
 
     # NoiseHeard: more likely in murder room at murder time
     for r in rooms:
         for t in time_points:
             if r == room and t == murder_time:
-                all_facts[f"NoiseHeard_{r}_{t}"] = random.random() > 0.3  # 70% chance
+                all_facts[f"NoiseHeard_{r}_{t}"] = random.random() > _NOISE_HEARD_MURDER_ROOM
             else:
-                all_facts[f"NoiseHeard_{r}_{t}"] = random.random() > 0.8  # 20% chance
+                all_facts[f"NoiseHeard_{r}_{t}"] = random.random() > _NOISE_HEARD_OTHER
 
     # KeyFound: random
     for r in rooms:
-        all_facts[f"KeyFound_{r}"] = random.random() > 0.8  # 20% chance
+        all_facts[f"KeyFound_{r}"] = random.random() > _KEY_FOUND_PROB
 
     # Step 4: Remove case file facts (culprit, weapon, room) - these are hidden
     # Remove all Culprit facts (they reveal the solution)
@@ -448,7 +456,7 @@ def has_contradiction(kb: dict) -> bool:
 
 # --- Entry point ---
 
-# NEW CODE: Random case generation (Clue-style initialization)
+
 def run_random_case(
     rules_path: str | Path,
     output_dir: str | Path,
