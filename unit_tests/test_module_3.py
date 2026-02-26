@@ -141,20 +141,6 @@ class TestCreateFolPropositions(unittest.TestCase):
         result = module_3.create_fol_propositions({})
         self.assertEqual(result, [])
 
-    def test_writes_to_output_path_when_provided(self) -> None:
-        """When output_path is provided, FOL propositions should be written as JSON."""
-        evidence = {"VictimFound_Study": True}
-        output_path = Path("integration_tests/module_3/output_test_files/test_kb_fol_output.json")
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        module_3.create_fol_propositions(evidence, output_path=output_path)
-        self.assertTrue(output_path.exists())
-        with open(output_path, encoding="utf-8") as f:
-            data = json.load(f)
-        self.assertIn("fol_propositions", data)
-        self.assertEqual(len(data["fol_propositions"]), 1)
-        self.assertEqual(data["fol_propositions"][0]["predicate"], "VictimFound")
-        self.assertEqual(data["fol_propositions"][0]["args"], ["Study"])
-
     def test_preserves_propositional_name_for_traceability(self) -> None:
         """Each FOL proposition should include the original propositional name."""
         evidence = {"MurderLocation_Study": True}

@@ -259,11 +259,30 @@ def _write_json(data: dict, path: str | Path) -> None:
 def write_inferred_facts(inferred_facts: list[dict], output_path: str | Path) -> None:
     """Write inferred facts with proof steps to JSON file.
 
+    The output includes a small summary for readability plus the full list of
+    proof-carrying inferred facts.
+
     Args:
         inferred_facts: List of {fact, rule_id, variable_bindings, premise_facts}.
         output_path: Path to write inferred_facts.json.
     """
-    _write_json({"inferred_facts": inferred_facts}, output_path)
+    # Summarise counts by predicate for a quick human-readable overview.
+    predicate_counts: dict[str, int] = {}
+    for entry in inferred_facts:
+        fact = entry.get("fact", {})
+        pred = fact.get("predicate")
+        if not pred:
+            continue
+        predicate_counts[pred] = predicate_counts.get(pred, 0) + 1
+
+    payload = {
+        "summary": {
+            "num_inferred": len(inferred_facts),
+            "predicates": predicate_counts,
+        },
+        "inferred_facts": inferred_facts,
+    }
+    _write_json(payload, output_path)
 
 
 def load_evidence_and_rules(
@@ -326,7 +345,24 @@ def run(
     fol_extended, inferred_facts = infer_fol(fol_propositions, data["rules"])
 
     if kb_fol_path is not None:
-        _write_json({"fol_propositions": fol_extended}, kb_fol_path)
+        # Group by predicate and add a brief summary to make the FOL KB easier
+        # to inspect by hand while preserving the raw list of propositions.
+        predicate_counts: dict[str, int] = {}
+        grouped_by_predicate: dict[str, list[dict]] = {}
+        for fol in fol_extended:
+            pred = fol.get("predicate", "")
+            predicate_counts[pred] = predicate_counts.get(pred, 0) + 1
+            grouped_by_predicate.setdefault(pred, []).append(fol)
+
+        kb_payload = {
+            "summary": {
+                "num_facts": len(fol_extended),
+                "predicates": predicate_counts,
+            },
+            "fol_propositions": fol_extended,
+            "by_predicate": grouped_by_predicate,
+        }
+        _write_json(kb_payload, kb_fol_path)
 
     if inferred_facts_path is not None:
         write_inferred_facts(inferred_facts, inferred_facts_path)
