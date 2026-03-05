@@ -49,7 +49,7 @@ class TestModule2Integration(unittest.TestCase):
         result = module_2.run_search(
             evidence_path=evidence_path,
             witness_knowledge=witness_knowledge,
-            query_budget=5,
+            query_budget=10,
             output_dir=_OUTPUT_DIR,
             beam_width=3,
         )
@@ -60,7 +60,7 @@ class TestModule2Integration(unittest.TestCase):
         self.assertIn("goal_reached", result)
 
         query_plan = result["query_plan"]
-        self.assertLessEqual(len(query_plan), 5, "Should respect query_budget")
+        self.assertLessEqual(len(query_plan), 10, "Should respect query_budget")
         for action in query_plan:
             self.assertIn(action, witness_knowledge, f"Query plan action {action} should be in witness_knowledge")
 
@@ -99,7 +99,7 @@ class TestModule2Integration(unittest.TestCase):
         search_result = module_2.run_search(
             evidence_path=evidence_path,
             witness_knowledge=witness_knowledge,
-            query_budget=5,
+            query_budget=10,
             output_dir=_OUTPUT_DIR,
             beam_width=3,
         )
@@ -135,7 +135,7 @@ class TestModule2Integration(unittest.TestCase):
         result = module_2.run_search(
             evidence_path=evidence_path,
             witness_knowledge=witness_knowledge,
-            query_budget=5,
+            query_budget=10,
             output_dir=_OUTPUT_DIR,
             beam_width=3,
         )
@@ -150,7 +150,7 @@ class TestModule2Integration(unittest.TestCase):
             query_plan_data = json.load(f)
         self.assertIn("actions", query_plan_data)
         self.assertIsInstance(query_plan_data["actions"], list)
-        self.assertLessEqual(len(query_plan_data["actions"]), 5, "Should respect query_budget")
+        self.assertLessEqual(len(query_plan_data["actions"]), 10, "Should respect query_budget")
 
         observations_path = _OUTPUT_DIR / "observations.json"
         self.assertTrue(observations_path.exists(), "observations.json should be created")

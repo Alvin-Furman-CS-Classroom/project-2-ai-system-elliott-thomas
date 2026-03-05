@@ -3,6 +3,8 @@
 Run from project root:
     python -m unittest integration_tests.module_3.test_integration_module_3 -v
 
+This integration test shows the case viewer at the end (Module 1 → 2 → 3 steps).
+
 This integration test writes its output to:
     integration_tests/module_3/output_test_files/
 
@@ -20,6 +22,13 @@ import unittest
 from pathlib import Path
 
 from src import module_1, module_2, module_3
+from src.case_viewer import (
+    get_solution_from_evidence,
+    get_solution_from_metadata,
+    load_evidence_and_rules_for_view,
+    show_case_view_multi,
+    _summarize_new_facts,
+)
 
 
 _THIS_DIR = Path(__file__).resolve().parent
@@ -36,6 +45,7 @@ _OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 RULES_PATH = _MODULE_1_DIR / "rules.json"
 EVIDENCE_PATH = _PIPELINE_DIR / "evidence_found.json"
+CASE_INIT_PATH = _PIPELINE_DIR / "case_init_generated.json"
 KB_FOL_PATH = _OUTPUT_DIR / "kb_fol.json"
 INFERRED_FACTS_PATH = _OUTPUT_DIR / "inferred_facts.json"
 
@@ -49,15 +59,26 @@ class TestModule3Integration(unittest.TestCase):
         case = module_1.run_random_case(
             rules_path=RULES_PATH,
             output_dir=_PIPELINE_DIR,
-            seed=101,
             kb_ratio=0.4,
         )
 
-        # evidence_found.json should exist after module_1.
+        # case_init_generated.json and evidence_found.json should exist after module_1.
+        self.assertTrue(
+            CASE_INIT_PATH.exists(),
+            "module_1 should create case_init_generated.json in the pipeline directory",
+        )
         self.assertTrue(EVIDENCE_PATH.exists(), "module_1 should create evidence_found.json")
-        with open(EVIDENCE_PATH, encoding="utf-8") as f:
-            evidence_data_before = json.load(f)
-        self.assertIn("evidence", evidence_data_before)
+
+        # Visualize the raw initial_evidence from case_init_generated.json (all initiated facts).
+        with open(CASE_INIT_PATH, encoding="utf-8") as f:
+            case_init_data = json.load(f)
+        initial_evidence_full = case_init_data.get("initial_evidence", {})
+        initial_evidence = {k: v for k, v in initial_evidence_full.items() if v is True}
+
+        evidence1, rooms, time_points, metadata = load_evidence_and_rules_for_view(
+            EVIDENCE_PATH, RULES_PATH
+        )
+        self.assertGreater(len(evidence1), 0, "Module 1 should produce evidence")
 
         # 2) Run module_2 beam-search query planning, which may enrich the evidence file.
         witness_knowledge = case["witness_knowledge"]
@@ -66,10 +87,21 @@ class TestModule3Integration(unittest.TestCase):
         search_result = module_2.run_search(
             evidence_path=EVIDENCE_PATH,
             witness_knowledge=witness_knowledge,
-            query_budget=5,
+            query_budget=10,
             output_dir=_PIPELINE_DIR,
             beam_width=3,
+            rules_path=RULES_PATH,
         )
+
+        # Build final_kb after Module 2 (evidence1 + observations, including NOT_ for False).
+        final_kb = dict(evidence1)
+        for obs in search_result["observations"]:
+            action = obs.get("action", "")
+            value = obs.get("result")
+            if value is True:
+                final_kb[action] = True
+            elif value is False and (action.startswith("KeyFound_") or action.startswith("At_")):
+                final_kb[f"NOT_{action}"] = True
 
         self.assertIn("query_plan", search_result)
         self.assertIn("observations", search_result)
@@ -115,6 +147,69 @@ class TestModule3Integration(unittest.TestCase):
             inferred_data = json.load(f)
         self.assertIn("inferred_facts", inferred_data)
         self.assertIsInstance(inferred_data["inferred_facts"], list)
+
+        # Show case viewer after the pipeline (Module 1 → 2 → 3).
+        evidence3 = dict(final_kb)
+        for fol in result.get("fol_propositions", []):
+            if fol.get("value") is True and not fol.get("negated"):
+                prop = fol.get("propositional")
+                if prop:
+                    evidence3[prop] = True
+        # Solutions inferred/annotated at different points.
+        solution0 = get_solution_from_metadata(case_init_data.get("metadata", {}))
+        solution1 = get_solution_from_metadata(metadata)
+        solution2 = get_solution_from_metadata(metadata)
+        if solution2.get("culprit") is None:
+            solution2 = get_solution_from_evidence(final_kb)
+        solution3 = get_solution_from_evidence(evidence3)
+        if solution3.get("culprit") is None:
+            solution3 = get_solution_from_metadata(metadata)
+        qplan = search_result.get("query_plan", [])
+        qplan_text = ", ".join(qplan) if qplan else "—"
+        steps = [
+            {
+                "module_id": 0,
+                "title": "Case init — Raw initial facts (case_init_generated.json)",
+                "solution": solution0,
+                "evidence": initial_evidence,
+                "extra_lines": [
+                    "Raw initial_evidence from case_init_generated.json (before Module 1 KB processing).",
+                    f"Total initiated facts (True): {len(initial_evidence)}",
+                ],
+            },
+            {
+                "module_id": 1,
+                "title": "Module 1 — Case init & evidence",
+                "solution": solution1,
+                "evidence": evidence1,
+                "extra_lines": [
+                    "Module 1 created a random case_init (body location in KB).",
+                ],
+            },
+            {
+                "module_id": 2,
+                "title": "Module 2 — After query plan & observations",
+                "solution": solution2,
+                "evidence": final_kb,
+                "extra_lines": [
+                    f"Goal reached: {search_result['goal_reached']}",
+                    f"Queries: {qplan_text}",
+                    *_summarize_new_facts(evidence1, final_kb),
+                ],
+            },
+            {
+                "module_id": 3,
+                "title": "Module 3 — After FOL inference",
+                "solution": solution3,
+                "evidence": evidence3,
+                "extra_lines": [
+                    f"Inferred facts: {len(result.get('inferred_facts', []))}",
+                    f"Total FOL propositions: {len(result.get('fol_propositions', []))}",
+                    *_summarize_new_facts(final_kb, evidence3),
+                ],
+            },
+        ]
+        show_case_view_multi(steps, rooms, time_points)
 
 
 if __name__ == "__main__":

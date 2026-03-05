@@ -203,13 +203,18 @@ def generate_random_case(
             # Alibi: true if person is NOT the culprit at that time
             all_facts[f"Alibi_{s}_{t}"] = not (s == culprit and t == murder_time)
 
-    # At(person, room, time): randomly assign locations, but ensure consistency
-    # Each person is in exactly one room at each time
+    # At(person, room, time): randomly assign locations, but ensure consistency.
+    # Each person is in exactly one room at each time, and the culprit is in the
+    # murder room at the murder time (so culprit, weapon, and body all co-locate then).
     person_locations: dict[tuple[str, str], str] = {}
     for person in suspects:
         for time in time_points:
-            # Randomly pick a room for this person at this time
-            loc = random.choice(rooms)
+            # Culprit must be in the murder room at the murder time; everyone
+            # else (and other times) are placed randomly.
+            if person == culprit and time == murder_time:
+                loc = room
+            else:
+                loc = random.choice(rooms)
             person_locations[(person, time)] = loc
             for r in rooms:
                 all_facts[f"At_{person}_{r}_{time}"] = r == loc
@@ -261,6 +266,20 @@ def generate_random_case(
     kb_size = int(len(fact_items) * kb_ratio)
     kb_evidence = dict(fact_items[:kb_size])
     witness_knowledge = dict(fact_items[kb_size:])
+
+    # Ensure the fact about where the body was found is known up front.
+    body_fact = f"VictimFound_{room}"
+    if body_fact in witness_knowledge:
+        kb_evidence[body_fact] = witness_knowledge.pop(body_fact)
+    elif body_fact not in kb_evidence:
+        kb_evidence[body_fact] = True
+
+    # Remove other VictimFound_* from witness_knowledge so Module 2 does not query them
+    # (body was found in exactly one room; other rooms are redundant).
+    for r in rooms:
+        other = f"VictimFound_{r}"
+        if other != body_fact:
+            witness_knowledge.pop(other, None)
 
     return {
         "kb_evidence": kb_evidence,
@@ -463,6 +482,7 @@ def run_random_case(
     seed: int | None = None,
     kb_ratio: float = 0.5,
     murder_time: str | None = None,
+    show_case_view: bool = False,
 ) -> dict:
     """Generate a random case and run Module 1 pipeline on it.
 
@@ -529,5 +549,26 @@ def run_random_case(
     }
     with open(case_init_path, "w", encoding="utf-8") as f:
         json.dump(case_init_data, f, indent=2)
+
+    if show_case_view:
+        from src.case_viewer import get_solution_from_metadata, show_case_view as show_view
+        rules_data = read_rules(rules_path)
+        gc = rules_data.get("game_constraints", {})
+        rooms = gc.get("rooms", [])
+        time_points = gc.get("time_points", ["8pm", "9pm", "10pm"])
+        evidence_for_view = {
+            k: True for k in kb
+            if k not in (_CONTRADICTION_KEY, _CONTRADICTION_GROUNDED_RULES_KEY)
+        }
+        solution = get_solution_from_metadata(case["metadata"])
+        show_view(
+            module_id=1,
+            title="Module 1 — Case init & evidence",
+            solution=solution,
+            evidence=evidence_for_view,
+            rooms=rooms,
+            time_points=time_points,
+            extra_lines=["(Solution from generated case; Module 1 knows culprit/weapon/room.)"],
+        )
 
     return case

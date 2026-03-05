@@ -328,6 +328,7 @@ def run(
     rules_path: str | Path,
     kb_fol_path: str | Path | None = None,
     inferred_facts_path: str | Path | None = None,
+    show_case_view: bool = False,
 ) -> dict:
     """Run full Module 3 pipeline: load, create FOL propositions, infer, write.
 
@@ -341,7 +342,32 @@ def run(
         dict with fol_propositions, inferred_facts, metadata.
     """
     data = load_evidence_and_rules(evidence_path, rules_path)
-    fol_propositions = create_fol_propositions(data["evidence"])
+
+    # If Module 2 wrote a hypothesis summary, convert its best guess into
+    # additional propositional facts so FOL rules can use them.
+    evidence_for_fol = dict(data["evidence"])
+    evidence_path_obj = Path(evidence_path)
+    hypothesis_summary_path = evidence_path_obj.parent / "hypothesis_summary.json"
+    if hypothesis_summary_path.exists():
+        try:
+            with open(hypothesis_summary_path, encoding="utf-8") as f:
+                hyp_data = json.load(f)
+            summary = hyp_data.get("summary", {})
+            best = summary.get("best_guess", {})
+            culprit = best.get("culprit")
+            weapon = best.get("weapon")
+            room = best.get("room")
+            if culprit:
+                evidence_for_fol[f"LikelyCulprit_{culprit}"] = True
+            if weapon:
+                evidence_for_fol[f"LikelyWeapon_{weapon}"] = True
+            if room:
+                evidence_for_fol[f"LikelyRoom_{room}"] = True
+        except Exception:
+            # Keep Module 3 robust if hypothesis file is malformed or unreadable.
+            pass
+
+    fol_propositions = create_fol_propositions(evidence_for_fol)
     fol_extended, inferred_facts = infer_fol(fol_propositions, data["rules"])
 
     if kb_fol_path is not None:
@@ -366,6 +392,28 @@ def run(
 
     if inferred_facts_path is not None:
         write_inferred_facts(inferred_facts, inferred_facts_path)
+
+    if show_case_view:
+        from src.case_viewer import get_solution_from_evidence, show_case_view as show_view
+        gc = data.get("game_constraints", {})
+        rooms = gc.get("rooms", [])
+        time_points = gc.get("time_points", ["8pm", "9pm", "10pm"])
+        evidence_for_view = dict(evidence_for_fol)
+        for fol in fol_extended:
+            if fol.get("value") is True and not fol.get("negated"):
+                prop = fol.get("propositional")
+                if prop:
+                    evidence_for_view[prop] = True
+        solution = get_solution_from_evidence(evidence_for_view)
+        show_view(
+            module_id=3,
+            title="Module 3 — FOL KB & inferred facts",
+            solution=solution,
+            evidence=evidence_for_view,
+            rooms=rooms,
+            time_points=time_points,
+            extra_lines=[f"Inferred facts: {len(inferred_facts)}", f"Total FOL propositions: {len(fol_extended)}"],
+        )
 
     return {
         "fol_propositions": fol_extended,

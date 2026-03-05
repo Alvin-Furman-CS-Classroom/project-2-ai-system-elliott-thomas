@@ -230,6 +230,11 @@ def beam_search_query_planning(
                 value = witness_knowledge.get(prop)
                 if value is True:
                     new_kb[prop] = True
+                elif value is False:
+                    # For some predicates, a False answer is itself useful knowledge
+                    # represented as a positive NOT_ fact in the KB.
+                    if prop.startswith("KeyFound_") or prop.startswith("At_"):
+                        new_kb[f"NOT_{prop}"] = True
                 new_queries = queries + [prop]
                 new_observations = observations + [
                     {"action": prop, "result": value}
@@ -315,12 +320,174 @@ def write_search_outputs(
                 f.write("  *** GOAL REACHED: Culprit, weapon, and room identified! ***\n")
 
 
+def _summarize_hypotheses(
+    kb: Dict[str, bool],
+    game_constraints: dict,
+) -> Dict[str, Any]:
+    """Build a lightweight summary over culprit/weapon/room hypotheses.
+
+    This does not try to be a full probability model; instead it:
+    - Enumerates all (suspect, weapon, room) triples that are not trivially
+      inconsistent with what we currently know.
+    - Scores each triple by counting supporting facts in the KB
+      (At_, Weapon_, VictimFound_, BloodStains_, Fingerprints_).
+    - Aggregates scores into per-suspect / per-weapon / per-room tallies.
+    """
+    suspects: list[str] = list(game_constraints.get("suspects", []))
+    weapons: list[str] = list(game_constraints.get("weapons", []))
+    rooms: list[str] = list(game_constraints.get("rooms", []))
+
+    if not suspects or not weapons or not rooms:
+        return {}
+
+    # Known elements inferred so far (if any).
+    known_culprits: set[str] = set()
+    for prop in kb:
+        if prop.startswith("Culprit_") and not prop.startswith("NOT_Culprit_") and kb.get(prop) is True:
+            parts = prop.split("_")
+            if len(parts) >= 3:
+                known_culprits.add(parts[1])
+
+    known_murder_rooms: set[str] = set(
+        r for r in rooms if kb.get(f"MurderLocation_{r}") is True
+    )
+
+    body_rooms: set[str] = set(
+        r for r in rooms if kb.get(f"VictimFound_{r}") is True
+    )
+
+    # Candidate sets fall back to full domains when we don't know yet.
+    culprit_candidates = list(known_culprits or suspects)
+    room_candidates = list(known_murder_rooms or body_rooms or rooms)
+
+    def _support_for(triple: tuple[str, str, str]) -> int:
+        s, w, r = triple
+        score = 0
+        # Being at the room at any time is strong evidence.
+        for prop in kb:
+            if prop.startswith(f"At_{s}_{r}_") and kb.get(prop) is True:
+                score += 2
+        # Murder weapon suspected to be where it appears in Weapon_ facts.
+        if kb.get(f"Weapon_{w}_{r}") is True:
+            score += 2
+        # Body and bloodstains in the room.
+        if kb.get(f"VictimFound_{r}") is True:
+            score += 1
+        if kb.get(f"BloodStains_{r}") is True:
+            score += 1
+        # Fingerprints in the room for that suspect.
+        if kb.get(f"Fingerprints_{r}_{s}") is True:
+            score += 1
+        return score
+
+    hypotheses: list[dict] = []
+    for s in culprit_candidates:
+        for w in weapons:
+            for r in room_candidates:
+                support = _support_for((s, w, r))
+                hypotheses.append(
+                    {
+                        "culprit": s,
+                        "weapon": w,
+                        "room": r,
+                        "support": support,
+                    }
+                )
+
+    # Sort by support descending and keep top few.
+    hypotheses.sort(key=lambda h: h["support"], reverse=True)
+    top_hypotheses = hypotheses[:10]
+
+    culprit_scores: Dict[str, float] = {}
+    weapon_scores: Dict[str, float] = {}
+    room_scores: Dict[str, float] = {}
+    for h in hypotheses:
+        culprit_scores[h["culprit"]] = culprit_scores.get(h["culprit"], 0.0) + h["support"]
+        weapon_scores[h["weapon"]] = weapon_scores.get(h["weapon"], 0.0) + h["support"]
+        room_scores[h["room"]] = room_scores.get(h["room"], 0.0) + h["support"]
+
+    def _best_key(scores: Dict[str, float]) -> str | None:
+        if not scores:
+            return None
+        return max(scores.items(), key=lambda item: item[1])[0]
+
+    best_guess = {
+        "culprit": _best_key(culprit_scores),
+        "weapon": _best_key(weapon_scores),
+        "room": _best_key(room_scores),
+    }
+
+    return {
+        "hypotheses": top_hypotheses,
+        "culprit_scores": culprit_scores,
+        "weapon_scores": weapon_scores,
+        "room_scores": room_scores,
+        "best_guess": best_guess,
+    }
+
+
+def _write_hypothesis_summary(
+    output_dir: str | Path,
+    summary: Dict[str, Any],
+    query_plan: List[str],
+    observations: List[Dict[str, Any]],
+) -> None:
+    """Persist hypothesis summary for downstream modules (e.g., Module 3)."""
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "summary": summary,
+        "query_plan": query_plan,
+        "observations": observations,
+    }
+    with open(out_dir / "hypothesis_summary.json", "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
+
+
+def _default_rules_path() -> Path | None:
+    """Best-effort default path to rules.json for this project."""
+    # src/module_2.py -> repo root is parent of src/
+    root = Path(__file__).resolve().parent.parent
+    candidate = root / "integration_tests" / "module_1" / "rules.json"
+    return candidate if candidate.exists() else None
+
+
+def _write_updated_evidence_file(
+    evidence_path: Path,
+    base_data: dict,
+    kb: Dict[str, bool],
+    observations: List[Dict[str, Any]],
+) -> None:
+    """Update evidence_found.json in place with learned facts and queries.
+
+    - evidence: adds all True facts in kb (excluding contradiction bookkeeping keys)
+    - witness_queries_added: appends {question, value} entries from observations
+    """
+    evidence_out: dict[str, Any] = dict(base_data)
+    evidence_out["evidence"] = {
+        k: True
+        for k, v in kb.items()
+        if v is True and k not in ("CONTRADICTION", "_CONTRADICTION_GROUNDED_RULES")
+    }
+
+    existing = evidence_out.get("witness_queries_added", [])
+    if not isinstance(existing, list):
+        existing = []
+    appended = [{"question": o.get("action"), "value": o.get("result")} for o in observations]
+    evidence_out["witness_queries_added"] = existing + appended
+
+    with open(evidence_path, "w", encoding="utf-8") as f:
+        json.dump(evidence_out, f, indent=2)
+
+
 def run_search(
     evidence_path: str | Path,
     witness_knowledge: Dict[str, bool],
     query_budget: int,
     output_dir: str | Path,
     beam_width: int = 3,
+    rules_path: str | Path | None = None,
+    show_case_view: bool = False,
 ) -> Dict[str, Any]:
     """Entry point: run beam-search-based query planning and write outputs.
 
@@ -358,19 +525,83 @@ def run_search(
         beam_width=beam_width,
     )
 
-    # Check if goal was reached
+    # Build KB after applying observations (add True answers and selected NOT_ facts).
     final_kb = dict(initial_kb)
     for obs in observations:
-        if obs.get("result") is True:
-            final_kb[obs.get("action", "")] = True
+        action = obs.get("action", "")
+        value = obs.get("result")
+        if value is True:
+            final_kb[action] = True
+        elif value is False:
+            if action.startswith("KeyFound_") or action.startswith("At_"):
+                final_kb[f"NOT_{action}"] = True
+
+    # Optional closure step: re-run Module 1 inference after new evidence arrives,
+    # and build a hypothesis summary over culprit/weapon/room.
+    hypothesis_summary: Dict[str, Any] | None = None
+    effective_rules_path = Path(rules_path) if rules_path is not None else _default_rules_path()
+    rules_data: dict | None = None
+    if effective_rules_path is not None and effective_rules_path.exists():
+        try:
+            from src import module_1
+
+            rules_data = module_1.read_rules(effective_rules_path)
+            grounded = module_1.ground_all_rules(rules_data["rules"], rules_data["game_constraints"])
+            module_1.infer(final_kb, grounded)
+            hypothesis_summary = _summarize_hypotheses(final_kb, rules_data.get("game_constraints", {}))
+        except Exception:
+            # Keep module_2 robust: if closure or summarisation fails, we still return beam-search outputs.
+            hypothesis_summary = None
+
     goal_reached = _is_goal_state(final_kb)
 
     write_search_outputs(query_plan, observations, search_trace, output_dir)
+
+    # Persist hypothesis summary for downstream modules (if available).
+    if hypothesis_summary is not None:
+        try:
+            _write_hypothesis_summary(output_dir, hypothesis_summary, query_plan, observations)
+        except Exception:
+            pass
+
+    # Update evidence_found.json in place so downstream modules can consume enriched KB.
+    try:
+        _write_updated_evidence_file(evidence_path, data, final_kb, observations)
+    except Exception:
+        # Don't fail the search run if persistence fails.
+        pass
+
+    if show_case_view and rules_path is not None:
+        from src.case_viewer import (
+            get_solution_from_evidence,
+            get_solution_from_metadata,
+            show_case_view as show_view,
+        )
+        rules_path = Path(rules_path)
+        with open(rules_path, encoding="utf-8") as f:
+            rules_data = json.load(f)
+        gc = rules_data.get("game_constraints", {})
+        rooms = gc.get("rooms", [])
+        time_points = gc.get("time_points", ["8pm", "9pm", "10pm"])
+        solution = get_solution_from_metadata(data.get("metadata", {}))
+        if solution.get("culprit") is None:
+            solution = get_solution_from_evidence(final_kb)
+        extra = [f"Goal reached: {goal_reached}", f"Queries used: {len(query_plan)}"]
+        show_view(
+            module_id=2,
+            title="Module 2 — Query plan & evidence",
+            solution=solution,
+            evidence=final_kb,
+            rooms=rooms,
+            time_points=time_points,
+            extra_lines=extra,
+        )
 
     return {
         "query_plan": query_plan,
         "observations": observations,
         "search_trace": search_trace,
         "goal_reached": goal_reached,
+        "hypothesis_summary": hypothesis_summary,
     }
 
