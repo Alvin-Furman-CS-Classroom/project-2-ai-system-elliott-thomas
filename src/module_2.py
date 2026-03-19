@@ -32,6 +32,7 @@ _QUERY_PRIORITY = (
 _HEURISTIC_GOAL_PROGRESS = 100.0  # Score per goal element (culprit, weapon, room) already identified
 _HEURISTIC_GOAL_BOOST = 3.0  # Extra multiplier for queries that would fill a missing goal element
 _HEURISTIC_TIE_BREAKER_MAX = 0.1  # Max random jitter to break ties
+_HEURISTIC_BLOODSTAIN_PROGRESS = 100.0  # Strongly reward discovered BloodStains_* facts (room inference needs it)
 
 
 def get_priority_score(proposition: str) -> int:
@@ -108,6 +109,13 @@ def _heuristic_value(
         prop.startswith("Weapon_") for prop in kb
     )
 
+    # In this Clue-style variant, MurderLocation is derived from BloodStains.
+    # During beam search we don't run inference closure each step, so the best
+    # proxy is: states that already contain any true BloodStains_* evidence.
+    has_bloodstains = any(
+        prop.startswith("BloodStains_") for prop in kb
+    )
+
     # Base score: reward progress toward goal
     goal_progress = 0.0
     if has_culprit:
@@ -116,6 +124,8 @@ def _heuristic_value(
         goal_progress += _HEURISTIC_GOAL_PROGRESS
     if has_weapon:
         goal_progress += _HEURISTIC_GOAL_PROGRESS
+    if has_bloodstains and not has_murder_location:
+        goal_progress += _HEURISTIC_BLOODSTAIN_PROGRESS
 
     # Remaining queries that help identify goal elements get higher weight
     remaining = [
@@ -132,6 +142,15 @@ def _heuristic_value(
         if prop.startswith("Culprit_") and not has_culprit:
             goal_related_score += base_score * _HEURISTIC_GOAL_BOOST
         elif prop.startswith("MurderLocation_") and not has_murder_location:
+            goal_related_score += base_score * _HEURISTIC_GOAL_BOOST
+        # Clue-style: murder location comes from bloodstains; when we haven't
+        # inferred MurderLocation_ yet (and we don't yet have any BloodStains evidence),
+        # prioritize querying BloodStains_*.
+        elif prop.startswith("BloodStains_") and (not has_murder_location) and (not has_bloodstains):
+            goal_related_score += base_score * _HEURISTIC_GOAL_BOOST
+        # Once we have bloodstains (room signal), query alibis to pin down the
+        # culprit's time via the Alibi -> NOT_Culprit rules.
+        elif prop.startswith("Alibi_") and has_bloodstains:
             goal_related_score += base_score * _HEURISTIC_GOAL_BOOST
         elif prop.startswith("Weapon_") and not has_weapon:
             goal_related_score += base_score * _HEURISTIC_GOAL_BOOST
@@ -217,10 +236,13 @@ def beam_search_query_planning(
                 return queries, observations, search_trace
 
             # Available actions are propositions not yet in KB.
+            # Also exclude propositions already asked along this beam path.
+            # Without this, repeated false answers remain "available" and can
+            # waste budget indefinitely (e.g., querying BloodStains_* that are false).
             available = [
                 prop
                 for prop in witness_knowledge
-                if prop not in kb
+                if prop not in kb and prop not in queries
             ]
             if not available:
                 continue

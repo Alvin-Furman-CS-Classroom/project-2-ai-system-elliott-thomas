@@ -167,7 +167,8 @@ def generate_random_case(
 
     # Step 2: Randomly place weapons in rooms (murder weapon goes to murder room)
     weapon_locations: dict[str, str] = {}
-    available_rooms = rooms.copy()
+    # Reserve the murder room for the murder weapon only.
+    available_rooms = [r for r in rooms if r != room]
     for w in weapons:
         if w == weapon:
             weapon_locations[w] = room  # Murder weapon in murder room
@@ -177,6 +178,8 @@ def generate_random_case(
                 weapon_locations[w] = loc
                 # Don't place multiple weapons in same room (optional rule)
                 available_rooms.remove(loc)
+                # If we run out of non-murder rooms (shouldn't happen),
+                # fall back to all rooms.
                 if not available_rooms:
                     available_rooms = rooms.copy()
 
@@ -268,14 +271,15 @@ def generate_random_case(
     witness_knowledge = dict(fact_items[kb_size:])
 
     # Ensure the fact about where the body was found is known up front.
-    body_fact = f"VictimFound_{room}"
-    if body_fact in witness_knowledge:
-        kb_evidence[body_fact] = witness_knowledge.pop(body_fact)
-    elif body_fact not in kb_evidence:
-        kb_evidence[body_fact] = True
+    # In this variant, the body is always discovered in the Hall.
+    body_fact = "VictimFound_Hall"
+    # Remove from witness_knowledge if present (so Module 2 can't waste a query).
+    witness_knowledge.pop(body_fact, None)
+    # Force in kb_evidence as True (overwrite any previous split result).
+    kb_evidence[body_fact] = True
 
-    # Remove other VictimFound_* from witness_knowledge so Module 2 does not query them
-    # (body was found in exactly one room; other rooms are redundant).
+    # Remove other VictimFound_* from witness_knowledge so Module 2 does not query them.
+    # (body was found in exactly one room; in this variant it's always Hall).
     for r in rooms:
         other = f"VictimFound_{r}"
         if other != body_fact:

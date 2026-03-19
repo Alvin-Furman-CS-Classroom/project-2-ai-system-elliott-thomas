@@ -65,6 +65,16 @@ def _parse_victim_found(prop: str) -> str | None:
     return parts[1]
 
 
+def _parse_body_dragged_from(prop: str) -> str | None:
+    """BodyDraggedFrom_Room -> room (where the body was dragged from)."""
+    if not prop.startswith("BodyDraggedFrom_") or prop.startswith("NOT_"):
+        return None
+    parts = prop.split("_")
+    if len(parts) < 2:
+        return None
+    return parts[1]
+
+
 def _parse_culprit_positive(prop: str) -> tuple[str, str] | None:
     """Culprit_Person_Time (positive only) -> (person, time)."""
     if not prop.startswith("Culprit_") or prop.startswith("NOT_Culprit_"):
@@ -81,7 +91,7 @@ def parse_evidence_to_room_state(
     time_points: list[str],
     murder_time: str | None = None,
 ) -> dict[str, dict[str, dict[str, Any]]]:
-    """Build room state from evidence: room -> time -> {people, weapons, door_locked, body_found}.
+    """Build room state from evidence: room -> time -> {people, weapons, door_locked, body_found, dragged_from}.
 
     evidence: proposition name -> True (only true facts).
     body_found: True in the room where VictimFound_Room is in evidence; if murder_time is given,
@@ -90,6 +100,7 @@ def parse_evidence_to_room_state(
     # Weapon locations are not time-dependent in our schema
     weapons_in_room: dict[str, list[str]] = {r: [] for r in rooms}
     body_room: str | None = None
+    dragged_from_room: str | None = None
     for prop in evidence:
         if prop in (_CONTRADICTION_KEY, _CONTRADICTION_GROUNDED_RULES_KEY):
             continue
@@ -101,6 +112,10 @@ def parse_evidence_to_room_state(
         vf = _parse_victim_found(prop)
         if vf and vf in rooms:
             body_room = vf
+
+        df = _parse_body_dragged_from(prop)
+        if df and df in rooms:
+            dragged_from_room = df
 
     result: dict[str, dict[str, dict[str, Any]]] = {}
     for room in rooms:
@@ -129,6 +144,7 @@ def parse_evidence_to_room_state(
                 "weapons": weapons_in_room.get(room, [])[:],
                 "door_locked": door_locked,
                 "body_found": body_found,
+                "dragged_from": dragged_from_room is not None and room == dragged_from_room,
             }
     return result
 
@@ -248,6 +264,7 @@ def _show_room_9x9_map_popup(
         weapons = s.get("weapons", [])
         locked = s.get("door_locked")
         body_found = s.get("body_found")
+        dragged_from = s.get("dragged_from")
 
         fill = "#ffdddd" if body_found else "#f7f7ff"
         outline = "#b00" if body_found else "#445"
@@ -256,6 +273,8 @@ def _show_room_9x9_map_popup(
         lines: list[str] = [room_name]
         if body_found:
             lines.append("Body")
+        if dragged_from:
+            lines.append("DraggedFrom")
         if people:
             lines.append("P: " + ", ".join(people[:3]))
         if weapons:
@@ -351,9 +370,12 @@ def show_case_view(
             weapons = s.get("weapons", [])
             locked = s.get("door_locked")
             body_found = s.get("body_found")
+            dragged_from = s.get("dragged_from")
             parts = []
             if body_found:
                 parts.append("Body")
+            if dragged_from:
+                parts.append("DraggedFrom")
             if people:
                 parts.append(", ".join(people))
             if weapons:
@@ -494,9 +516,12 @@ def show_case_view_multi(
                 weapons = s.get("weapons", [])
                 locked = s.get("door_locked")
                 body_found = s.get("body_found")
+                dragged_from = s.get("dragged_from")
                 parts = []
                 if body_found:
                     parts.append("Body")
+                if dragged_from:
+                    parts.append("DraggedFrom")
                 if people:
                     parts.append(", ".join(people))
                 if weapons:
@@ -611,7 +636,7 @@ if __name__ == "__main__":
         search_result = module_2.run_search(
             evidence_path,
             case["witness_knowledge"],
-            query_budget=15,
+            query_budget=200,
             output_dir=out,
             beam_width=3,
             rules_path=rules_path,
@@ -706,7 +731,12 @@ if __name__ == "__main__":
         if solution4.get("weapon") and solution4.get("room"):
             evidence4[f"Weapon_{solution4['weapon']}_{solution4['room']}"] = True
         if solution4.get("room"):
-            evidence4[f"VictimFound_{solution4['room']}"] = True
+            # Body discovery location is fixed to Hall in Module 1.
+            # Module 4 hypothesis is interpreted as the dragged-from (murder) room.
+            for k in list(evidence4.keys()):
+                if k.startswith("BodyDraggedFrom_"):
+                    evidence4.pop(k, None)
+            evidence4[f"BodyDraggedFrom_{solution4['room']}"] = True
 
         steps.append({
             "module_id": 4,

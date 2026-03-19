@@ -327,19 +327,18 @@ class TestGenerateRandomCase(unittest.TestCase):
         culprit_facts = [k for k in all_facts.keys() if k.startswith("Culprit_")]
         self.assertEqual(len(culprit_facts), 0, "Culprit facts should be hidden (case file)")
 
-    def test_victim_found_only_in_murder_room(self):
-        """VictimFound should only be True in the solution room."""
+    def test_victim_found_only_in_hall(self):
+        """VictimFound should only be True in the Hall (body discovery location)."""
         result = module_1.generate_random_case(RULES_PATH, seed=42)
-        solution_room = result["metadata"]["_solution_room"]
         all_facts = {**result["kb_evidence"], **result["witness_knowledge"]}
         for room in module_1.read_rules(RULES_PATH)["game_constraints"]["rooms"]:
             fact = f"VictimFound_{room}"
             if fact in all_facts:
-                expected = room == solution_room
+                expected = room == "Hall"
                 self.assertEqual(
                     all_facts[fact],
                     expected,
-                    f"VictimFound_{room} should be {expected} (solution room is {solution_room})",
+                    f"VictimFound_{room} should be {expected} (body discovery room is Hall)",
                 )
 
     def test_respects_kb_ratio(self):

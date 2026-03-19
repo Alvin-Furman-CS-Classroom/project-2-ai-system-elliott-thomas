@@ -20,8 +20,8 @@
     },
     {
       "id": "R004",
-      "description": "If victim is found in a room with blood stains, then murder occurred in that room",
-      "if": ["VictimFound_ROOM", "BloodStains_ROOM"],
+      "description": "If blood stains are found in a room, then murder occurred in that room",
+      "if": ["BloodStains_ROOM"],
       "then": "MurderLocation_ROOM"
     },
     {
@@ -83,6 +83,12 @@
       "description": "If person had access to weapon and murder occurred in same room, then strong suspect",
       "if": ["HadAccess_PERSON_WEAPON", "MurderLocation_ROOM", "At_PERSON_ROOM_TIME"],
       "then": "StrongSuspect_PERSON"
+    },
+    {
+      "id": "R015",
+      "description": "If murder occurred in a room, then the body was dragged from that room",
+      "if": ["MurderLocation_ROOM"],
+      "then": "BodyDraggedFrom_ROOM"
     }
   ],
   "game_constraints": {

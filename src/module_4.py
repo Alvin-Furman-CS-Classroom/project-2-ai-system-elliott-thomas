@@ -79,7 +79,11 @@ def _extract_time_candidates_from_at(fol_propositions: list[dict]) -> set[str]:
         args = fol.get("args", [])
         if len(args) != 3:
             continue
-        times.add(str(args[2]))
+        t = str(args[2])
+        # Module 3 sometimes uses the literal "TIME" string as a wildcard.
+        # Hypothesis time should come from the actual discrete time points.
+        if t != "TIME":
+            times.add(t)
     return times
 
 
@@ -144,6 +148,10 @@ def _score_hypothesis(
         return (-100.0, ["NOT At(con, room, time) in KB"])
     if neg_index.get("Culprit", {}).get((culprit, time)):
         return (-100.0, ["NOT Culprit(person, time) in KB"])
+    # If Alibi is explicitly present, the person cannot be the culprit at that time.
+    # (Even if NOT_Culprit hasn't been derived/recorded yet.)
+    if pos_index.get("Alibi", {}).get((culprit, time)):
+        return (-75.0, ["Alibi(person, time) in KB"])
 
     # Positive matches.
     at_key = (culprit, room, time)
@@ -157,11 +165,15 @@ def _score_hypothesis(
         _add_support(support, [pos_index["Weapon"][weap_key]])
 
     # MurderLocation may be absent in some runs; VictimFound can still be informative.
-    if pos_index.get("MurderLocation", {}).get((room,)):
+    if pos_index.get("BodyDraggedFrom", {}).get((room,)):
+        score += 40.0
+        _add_support(support, [pos_index["BodyDraggedFrom"][(room,)]])
+    elif pos_index.get("MurderLocation", {}).get((room,)):
         score += 30.0
         _add_support(support, [pos_index["MurderLocation"][(room,)]])
     elif pos_index.get("VictimFound", {}).get((room,)):
-        score += 15.0
+        # Body discovery room is partially fixed in Module 1, so treat it as weaker evidence.
+        score += 5.0
         _add_support(support, [pos_index["VictimFound"][(room,)]])
 
     # Positive Culprit is usually absent (culprit hidden), but handle it if inferred.
