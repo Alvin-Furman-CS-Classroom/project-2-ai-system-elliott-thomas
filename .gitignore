@@ -19,3 +19,7 @@ build/
 # module outputs
 **/evidence_found.json
 **/case_init_uncertain.json
+
+# integration test generated artifacts
+integration_tests/**/pipeline_tmp/
+integration_tests/**/output_test_files/
