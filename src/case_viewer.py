@@ -416,8 +416,34 @@ def show_case_view_multi(
 
     sol_frame = ttk.LabelFrame(main, text="Solution / Identified", padding=5)
     sol_frame.pack(fill=tk.X, pady=(0, 4))
-    sol_label = ttk.Label(sol_frame, text="")
-    sol_label.pack(anchor=tk.W)
+
+    actual_box = ttk.LabelFrame(sol_frame, text="Actual Solution", padding=5)
+    module4_box = ttk.LabelFrame(sol_frame, text="Module 4 Hypothesis", padding=5)
+    actual_box.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+    module4_box.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+    actual_label = ttk.Label(actual_box, text="", justify=tk.LEFT)
+    module4_label = ttk.Label(module4_box, text="", justify=tk.LEFT)
+    actual_label.pack(anchor=tk.W, fill=tk.X)
+    module4_label.pack(anchor=tk.W, fill=tk.X)
+
+    actual_solution: dict[str, str | None] = {}
+    module4_solution: dict[str, str | None] = {}
+    for s in steps:
+        if not actual_solution and s.get("module_id") in (0, 1):
+            actual_solution = s.get("solution") or {}
+        if not module4_solution and s.get("module_id") == 4:
+            module4_solution = s.get("solution") or {}
+
+    def _render_solution(sol: dict[str, str | None]) -> str:
+        culp = sol.get("culprit") or "?"
+        weap = sol.get("weapon") or "?"
+        room = sol.get("room") or "?"
+        time = sol.get("time") or "?"
+        return f"Culprit: {culp}\nWeapon: {weap}\nRoom: {room}\nTime: {time}"
+
+    actual_label.config(text=_render_solution(actual_solution))
+    module4_label.config(text=_render_solution(module4_solution) if module4_solution else "Not generated")
 
     extra_frame = ttk.Frame(main)
     extra_frame.pack(fill=tk.X)
@@ -446,11 +472,8 @@ def show_case_view_multi(
         solution = step["solution"]
         header_label.config(text=f"Detective AI — Module {step['module_id']} Case View")
         root.title(step["title"])
-        culp = solution.get("culprit") or "?"
-        weap = solution.get("weapon") or "?"
-        room = solution.get("room") or "?"
-        time = solution.get("time") or "?"
-        sol_label.config(text=f"Culprit: {culp}  |  Weapon: {weap}  |  Room: {room}  |  Time: {time}")
+        # Actual + Module 4 hypothesis boxes stay fixed while cycling modules.
+        # The evidence grid still uses the *current step's* solution time.
         for lb in extra_labels:
             lb.destroy()
         extra_labels.clear()
@@ -588,7 +611,7 @@ if __name__ == "__main__":
         search_result = module_2.run_search(
             evidence_path,
             case["witness_knowledge"],
-            query_budget=10,
+            query_budget=15,
             output_dir=out,
             beam_width=3,
             rules_path=rules_path,
