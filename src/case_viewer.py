@@ -388,7 +388,7 @@ def show_case_view_multi(
     rooms: list[str],
     time_points: list[str],
 ) -> None:
-    """Show one window with a 'Next module' button to cycle through Module 1 → 2 → 3 state.
+    """Show one window with a 'Next module' button to cycle through Module 1 → 2 → 3 → 4 state.
 
     steps: list of dicts, each with keys module_id, title, solution, evidence, extra_lines.
     rooms, time_points: same for all steps.
@@ -490,7 +490,11 @@ def show_case_view_multi(
 
     btn_frame = ttk.Frame(main)
     btn_frame.pack(fill=tk.X, pady=(6, 0))
-    ttk.Button(btn_frame, text="Next module (init → 1 → 2 → 3)", command=on_next).pack(side=tk.LEFT)
+    ttk.Button(
+        btn_frame,
+        text="Next module (init → 1 → 2 → 3 → 4)",
+        command=on_next,
+    ).pack(side=tk.LEFT)
     ttk.Button(
         btn_frame,
         text="Open 3x3 map",
@@ -554,7 +558,7 @@ if __name__ == "__main__":
     """
     import tempfile
     from pathlib import Path
-    from src import module_1, module_2, module_3
+    from src import module_1, module_2, module_3, module_4
     root = Path(__file__).resolve().parent.parent
     rules_path = root / "integration_tests" / "module_1" / "rules.json"
     if not rules_path.exists():
@@ -611,7 +615,15 @@ if __name__ == "__main__":
             ],
         })
         # Module 3: FOL inference (evidence + inferred facts; base = module 2 final_kb for cumulative view)
-        m3_result = module_3.run(evidence_path, rules_path)
+        kb_fol_path = out / "kb_fol.json"
+        inferred_facts_path = out / "inferred_facts.json"
+        m3_result = module_3.run(
+            evidence_path,
+            rules_path,
+            kb_fol_path=kb_fol_path,
+            inferred_facts_path=inferred_facts_path,
+            show_case_view=False,
+        )
         evidence3 = dict(final_kb)
         for fol in m3_result.get("fol_propositions", []):
             if fol.get("value") is True and not fol.get("negated"):
@@ -632,4 +644,56 @@ if __name__ == "__main__":
                 *_summarize_new_facts(final_kb, evidence3),
             ],
         })
+
+        # Module 4: hypothesis generation from kb_fol.json + inferred_facts.json
+        module_4_output_dir = out / "module_4_out"
+        module_4_output_dir.mkdir(parents=True, exist_ok=True)
+        module_4.run(
+            kb_fol_path=kb_fol_path,
+            inferred_facts_path=inferred_facts_path,
+            output_dir=module_4_output_dir,
+            top_k=3,
+        )
+        hypotheses_ranked_path = module_4_output_dir / "hypotheses_ranked.json"
+        solution4 = get_solution_from_evidence(evidence3)
+        best_score = None
+        best_hyp = None
+        if hypotheses_ranked_path.exists():
+            try:
+                with open(hypotheses_ranked_path, encoding="utf-8") as f:
+                    hyp_data = json.load(f)
+                ranked = hyp_data.get("hypotheses_ranked", [])
+                if ranked:
+                    best_hyp = ranked[0]
+                    solution4 = {
+                        "culprit": best_hyp.get("culprit"),
+                        "weapon": best_hyp.get("weapon"),
+                        "room": best_hyp.get("room"),
+                        "time": best_hyp.get("time"),
+                    }
+                    best_score = best_hyp.get("score")
+            except Exception:
+                pass
+
+        # For visualization, inject the best-hypothesis placement into evidence
+        # so the room map can show where Module 4 believes the culprit was.
+        evidence4 = dict(evidence3)
+        if solution4.get("culprit") and solution4.get("room") and solution4.get("time"):
+            evidence4[f"At_{solution4['culprit']}_{solution4['room']}_{solution4['time']}"] = True
+        if solution4.get("weapon") and solution4.get("room"):
+            evidence4[f"Weapon_{solution4['weapon']}_{solution4['room']}"] = True
+        if solution4.get("room"):
+            evidence4[f"VictimFound_{solution4['room']}"] = True
+
+        steps.append({
+            "module_id": 4,
+            "title": "Module 4 — After hypothesis ranking",
+            "solution": solution4,
+            "evidence": evidence4,
+            "extra_lines": [
+                f"Best hypothesis score: {best_score if best_score is not None else '—'}",
+                "Module 4 generates hypotheses (ranked); this step visualizes the top choice.",
+            ],
+        })
+
         show_case_view_multi(steps, rooms, time_points)
