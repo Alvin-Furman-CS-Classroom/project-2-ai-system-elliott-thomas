@@ -24,7 +24,6 @@ from pathlib import Path
 from src import module_1, module_2, module_3
 from src.case_viewer import (
     get_solution_from_evidence,
-    get_solution_from_metadata,
     load_evidence_and_rules_for_view,
     show_case_view_multi,
     _summarize_new_facts,
@@ -75,7 +74,7 @@ class TestModule3Integration(unittest.TestCase):
         initial_evidence_full = case_init_data.get("initial_evidence", {})
         initial_evidence = {k: v for k, v in initial_evidence_full.items() if v is True}
 
-        evidence1, rooms, time_points, metadata = load_evidence_and_rules_for_view(
+        evidence1, rooms, time_points, _metadata = load_evidence_and_rules_for_view(
             EVIDENCE_PATH, RULES_PATH
         )
         self.assertGreater(len(evidence1), 0, "Module 1 should produce evidence")
@@ -156,14 +155,12 @@ class TestModule3Integration(unittest.TestCase):
                 if prop:
                     evidence3[prop] = True
         # Solutions inferred/annotated at different points.
-        solution0 = get_solution_from_metadata(case_init_data.get("metadata", {}))
-        solution1 = get_solution_from_metadata(metadata)
-        solution2 = get_solution_from_metadata(metadata)
-        if solution2.get("culprit") is None:
-            solution2 = get_solution_from_evidence(final_kb)
+        # Important: do not use case/rules metadata for solution. Metadata is only for
+        # human review; the displayed "identified culprit" must come from evidence only.
+        solution0 = get_solution_from_evidence(initial_evidence)
+        solution1 = get_solution_from_evidence(evidence1)
+        solution2 = get_solution_from_evidence(final_kb)
         solution3 = get_solution_from_evidence(evidence3)
-        if solution3.get("culprit") is None:
-            solution3 = get_solution_from_metadata(metadata)
         qplan = search_result.get("query_plan", [])
         qplan_text = ", ".join(qplan) if qplan else "—"
         steps = [
