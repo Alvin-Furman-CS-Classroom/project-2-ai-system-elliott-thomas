@@ -177,6 +177,102 @@ def get_solution_from_evidence(evidence: dict[str, bool]) -> dict[str, str | Non
     return {"culprit": None, "weapon": weapon_in_murder_room, "room": murder_room, "time": None}
 
 
+def _room_map_cell_index(room_idx: int) -> tuple[int, int] | None:
+    """Map the Nth room into a cell on a 9x9 canvas.
+
+    We place the 9 rooms into the top-left 3x3 region:
+      idx 0..8 -> (row=idx//3, col=idx%3)
+    leaving the rest blank.
+    """
+    if room_idx < 0 or room_idx > 8:
+        return None
+    return (room_idx // 3, room_idx % 3)
+
+
+def _show_room_9x9_map_popup(
+    parent_root: Any,
+    title: str,
+    solution: dict[str, str | None],
+    evidence: dict[str, bool],
+    rooms: list[str],
+    time_points: list[str],
+) -> None:
+    """Show a 3x3 room map where each (of the 9) rooms is drawn as one square.
+
+    The 9 rooms are mapped into row-major order:
+      idx 0..8 -> (row=idx//3, col=idx%3)
+    """
+    try:
+        import tkinter as tk
+    except ImportError:
+        return
+
+    map_time = solution.get("time") or (time_points[0] if time_points else None)
+    if map_time is None:
+        map_time = ""
+
+    state = parse_evidence_to_room_state(
+        evidence,
+        rooms,
+        time_points,
+        murder_time=map_time if map_time else None,
+    )
+
+    popup = tk.Toplevel(parent_root)
+    popup.title(title)
+
+    cell = 120
+    grid = 3
+    canvas_w = grid * cell
+    canvas_h = grid * cell
+    canvas = tk.Canvas(popup, width=canvas_w, height=canvas_h, background="white")
+    canvas.pack(fill=tk.BOTH, expand=True)
+
+    # Draw background grid.
+    for i in range(grid + 1):
+        x = i * cell
+        canvas.create_line(x, 0, x, canvas_h, fill="#ddd")
+        canvas.create_line(0, i * cell, canvas_w, i * cell, fill="#ddd")
+
+    # Draw each room in its mapped cell.
+    for room_idx, room_name in enumerate(rooms[:9]):
+        cell_rc = _room_map_cell_index(room_idx)
+        if cell_rc is None:
+            continue
+        r_i, c_i = cell_rc
+        x0 = c_i * cell
+        y0 = r_i * cell
+
+        s = state.get(room_name, {}).get(map_time, {})
+        people = s.get("people", [])
+        weapons = s.get("weapons", [])
+        locked = s.get("door_locked")
+        body_found = s.get("body_found")
+
+        fill = "#ffdddd" if body_found else "#f7f7ff"
+        outline = "#b00" if body_found else "#445"
+        canvas.create_rectangle(x0, y0, x0 + cell, y0 + cell, fill=fill, outline=outline, width=2)
+
+        lines: list[str] = [room_name]
+        if body_found:
+            lines.append("Body")
+        if people:
+            lines.append("P: " + ", ".join(people[:3]))
+        if weapons:
+            lines.append("W: " + ", ".join(weapons[:2]))
+        if locked is True:
+            lines.append("Locked")
+
+        canvas.create_text(
+            x0 + cell / 2,
+            y0 + cell / 2,
+            text="\n".join(lines),
+            font=("Helvetica", 7),
+            fill="#111",
+            justify="center",
+        )
+
+
 def show_case_view(
     module_id: int,
     title: str,
@@ -266,6 +362,19 @@ def show_case_view(
                 parts.append("Locked")
             row.append(", ".join(parts) if parts else "—")
         tree.insert("", tk.END, values=row)
+
+    ttk.Button(
+        main,
+        text="Open 3x3 room map",
+        command=lambda: _show_room_9x9_map_popup(
+            root,
+            f"{title} — 3x3 map",
+            solution,
+            evidence,
+            rooms,
+            time_points,
+        ),
+    ).pack(anchor=tk.W, pady=(6, 0))
 
     def on_closing() -> None:
         root.destroy()
@@ -382,6 +491,18 @@ def show_case_view_multi(
     btn_frame = ttk.Frame(main)
     btn_frame.pack(fill=tk.X, pady=(6, 0))
     ttk.Button(btn_frame, text="Next module (init → 1 → 2 → 3)", command=on_next).pack(side=tk.LEFT)
+    ttk.Button(
+        btn_frame,
+        text="Open 3x3 map",
+        command=lambda: _show_room_9x9_map_popup(
+            root,
+            f"{steps[idx_var[0]]['title']} — 3x3 map",
+            steps[idx_var[0]].get("solution", {}),
+            steps[idx_var[0]].get("evidence", {}),
+            rooms,
+            time_points,
+        ),
+    ).pack(side=tk.LEFT, padx=(10, 0))
     step_label = ttk.Label(btn_frame, text="")
     step_label.pack(side=tk.LEFT, padx=(8, 0))
 
