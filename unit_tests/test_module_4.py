@@ -98,6 +98,7 @@ class TestModule4(unittest.TestCase):
                 inferred_facts_path=inf_path,
                 output_dir=out_dir,
                 top_k=3,
+                random_seed=7,
             )
 
             ranked_path = out_dir / "hypotheses_ranked.json"
@@ -108,6 +109,10 @@ class TestModule4(unittest.TestCase):
             ranked_data = json.loads(ranked_path.read_text(encoding="utf-8"))
             self.assertIn("hypotheses_ranked", ranked_data)
             self.assertIn("summary", ranked_data)
+            self.assertIn("ga_config", ranked_data)
+            self.assertIn("fitness_progress", ranked_data)
+            self.assertIn("search_stats", ranked_data)
+            self.assertEqual(ranked_data["ga_config"]["random_seed"], 7)
 
             hypotheses = ranked_data["hypotheses_ranked"]
             self.assertTrue(len(hypotheses) >= 1)

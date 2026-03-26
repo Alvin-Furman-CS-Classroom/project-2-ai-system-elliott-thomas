@@ -58,7 +58,7 @@ class TestModule4Integration(unittest.TestCase):
         module_2.run_search(
             evidence_path=EVIDENCE_PATH,
             witness_knowledge=witness_knowledge,
-            query_budget=200,
+            query_budget=100,
             output_dir=_PIPELINE_DIR,
             beam_width=3,
             rules_path=RULES_PATH,
@@ -80,6 +80,7 @@ class TestModule4Integration(unittest.TestCase):
             inferred_facts_path=INFERRED_FACTS_PATH,
             output_dir=_OUTPUT_DIR,
             top_k=3,
+            random_seed=123,
         )
 
         self.assertTrue(HYPOTHESES_RANKED_PATH.exists(), "hypotheses_ranked.json should be written by module_4")
@@ -90,6 +91,9 @@ class TestModule4Integration(unittest.TestCase):
 
         self.assertIn("hypotheses_ranked", ranked)
         self.assertIn("summary", ranked)
+        self.assertIn("ga_config", ranked)
+        self.assertIn("fitness_progress", ranked)
+        self.assertIn("search_stats", ranked)
         hypotheses = ranked["hypotheses_ranked"]
         self.assertIsInstance(hypotheses, list)
         self.assertGreater(len(hypotheses), 0, "Expected at least one hypothesis")
@@ -147,12 +151,7 @@ class TestModule4Integration(unittest.TestCase):
         if solution4.get("weapon") and solution4.get("room"):
             evidence4[f"Weapon_{solution4['weapon']}_{solution4['room']}"] = True
         if solution4.get("room"):
-            # Body discovery location is fixed to Hall in Module 1.
-            # Module 4 hypothesis is interpreted as the *dragged-from* (murder) room.
-            for k in list(evidence4.keys()):
-                if k.startswith("BodyDraggedFrom_"):
-                    evidence4.pop(k, None)
-            evidence4[f"BodyDraggedFrom_{solution4['room']}"] = True
+            evidence4[f"VictimFound_{solution4['room']}"] = True
 
         steps = [
             {
