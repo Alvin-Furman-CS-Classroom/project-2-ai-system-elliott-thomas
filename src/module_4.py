@@ -15,9 +15,15 @@ Outputs:
 from __future__ import annotations
 
 import json
+import itertools
 import random
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Tuple
+
+_LIKELY_PRIOR_WEIGHT = 35.0
+_GLOBAL_NOT_CULPRIT_PENALTY = 8.0
+_GLOBAL_ALIBI_PENALTY = 6.0
+_EXACT_ENUM_MAX = 50000
 
 
 def _load_json(path: str | Path) -> dict:
@@ -135,14 +141,33 @@ def _score_hypothesis(
 
     # Soft preferences from Module 2 hypothesis summary.
     if culprit in likely_culprits:
-        score += 50.0
+        score += _LIKELY_PRIOR_WEIGHT
         _add_support(support, [pos_index.get("LikelyCulprit", {}).get((culprit,))])
     if weapon in likely_weapons:
-        score += 50.0
+        score += _LIKELY_PRIOR_WEIGHT
         _add_support(support, [pos_index.get("LikelyWeapon", {}).get((weapon,))])
     if room in likely_rooms:
-        score += 50.0
+        score += _LIKELY_PRIOR_WEIGHT
         _add_support(support, [pos_index.get("LikelyRoom", {}).get((room,))])
+
+    # Light global penalties to break ties among culprits that otherwise have
+    # similar local support in (room, weapon, time).
+    neg_culprit_count = sum(
+        1
+        for args in neg_index.get("Culprit", {})
+        if len(args) >= 1 and args[0] == culprit
+    )
+    if neg_culprit_count:
+        score -= _GLOBAL_NOT_CULPRIT_PENALTY * float(neg_culprit_count)
+        support.append(f"Global NOT_Culprit penalty x{neg_culprit_count}")
+    alibi_count = sum(
+        1
+        for args in pos_index.get("Alibi", {})
+        if len(args) >= 1 and args[0] == culprit
+    )
+    if alibi_count:
+        score -= _GLOBAL_ALIBI_PENALTY * float(alibi_count)
+        support.append(f"Global Alibi penalty x{alibi_count}")
 
     # Hard contradictions from NOT_ facts.
     if neg_index.get("At", {}).get((culprit, room, time)):
@@ -296,8 +321,50 @@ def _evaluate_population(
             has_contradiction=has_contradiction,
         )
         scored.append({"hypothesis": hyp, "score": score, "supporting_facts": support})
-    scored.sort(key=lambda p: float(p["score"]), reverse=True)
+    scored.sort(
+        key=lambda p: (
+            -float(p["score"]),
+            str(p["hypothesis"]["culprit"]),
+            str(p["hypothesis"]["weapon"]),
+            str(p["hypothesis"]["room"]),
+            str(p["hypothesis"]["time"]),
+        )
+    )
     return scored
+
+
+def _evaluate_exhaustive_candidates(
+    *,
+    culprits: list[str],
+    weapons: list[str],
+    rooms: list[str],
+    times: list[str],
+    pos_index: dict,
+    neg_index: dict,
+    inferred_keys: set[tuple[str, tuple[str, ...]]],
+    likely_culprits: set[str],
+    likely_weapons: set[str],
+    likely_rooms: set[str],
+    has_contradiction: bool,
+) -> list[dict[str, Any]] | None:
+    total = len(culprits) * len(weapons) * len(rooms) * len(times)
+    if total <= 0 or total > _EXACT_ENUM_MAX:
+        return None
+
+    population = [
+        {"culprit": c, "weapon": w, "room": r, "time": t}
+        for c, w, r, t in itertools.product(culprits, weapons, rooms, times)
+    ]
+    return _evaluate_population(
+        population=population,
+        pos_index=pos_index,
+        neg_index=neg_index,
+        inferred_keys=inferred_keys,
+        likely_culprits=likely_culprits,
+        likely_weapons=likely_weapons,
+        likely_rooms=likely_rooms,
+        has_contradiction=has_contradiction,
+    )
 
 
 def run(
@@ -335,14 +402,30 @@ def run(
 
     likely_culprits, likely_weapons, likely_rooms = _extract_likely_constants(pos_index)
 
-    # Candidate sets derived from what's present.
-    culprits = _extract_unique_args(fol_propositions, "Culprit", 0) or likely_culprits
+    # Candidate sets derived from what's present. Prefer broad, observable domains
+    # so we don't accidentally exclude the true answer when "Likely*" is narrow.
+    culprits = (
+        _extract_unique_args(fol_propositions, "Culprit", 0)
+        | _extract_unique_args(fol_propositions, "At", 0)
+        | _extract_unique_args(fol_propositions, "Alibi", 0)
+        | _extract_unique_args(fol_propositions, "Fingerprints", 1)
+    ) or likely_culprits
     rooms = (
         _extract_unique_args(fol_propositions, "At", 1)
         | _extract_unique_args(fol_propositions, "VictimFound", 0)
+        | _extract_unique_args(fol_propositions, "BloodStains", 0)
+        | _extract_unique_args(fol_propositions, "MurderLocation", 0)
+        | _extract_unique_args(fol_propositions, "BodyDraggedFrom", 0)
     )
-    weapons = _extract_unique_args(fol_propositions, "Weapon", 0) or likely_weapons
-    times = _extract_time_candidates_from_at(fol_propositions)
+    weapons = (
+        _extract_unique_args(fol_propositions, "Weapon", 0)
+        | _extract_unique_args(fol_propositions, "HadAccess", 1)
+        | likely_weapons
+    ) or {"Dagger"}
+    times = (
+        _extract_time_candidates_from_at(fol_propositions)
+        | _extract_unique_args(fol_propositions, "MurderTime", 0)
+    )
 
     # Fallbacks.
     culprits = culprits or likely_culprits or {"MrsWhite"}
@@ -410,6 +493,24 @@ def run(
             next_population.append(child)
         population = next_population
 
+    # When the joint search space is reasonably small, evaluate all candidates
+    # exactly so ranking quality does not depend on GA sampling luck.
+    exhaustive_scored = _evaluate_exhaustive_candidates(
+        culprits=culprits_l,
+        weapons=weapons_l,
+        rooms=rooms_l,
+        times=times_l,
+        pos_index=pos_index,
+        neg_index=neg_index,
+        inferred_keys=inferred_keys,
+        likely_culprits=likely_culprits,
+        likely_weapons=likely_weapons,
+        likely_rooms=likely_rooms,
+        has_contradiction=has_contradiction,
+    )
+    if exhaustive_scored is not None:
+        final_scored = exhaustive_scored
+
     hypotheses: list[dict[str, Any]] = [
         {
             **item["hypothesis"],
@@ -419,8 +520,31 @@ def run(
         }
         for item in final_scored
     ]
-    hypotheses.sort(key=lambda h: float(h["score"]), reverse=True)
-    ranked = hypotheses[: max(top_k, 1)]
+    hypotheses.sort(
+        key=lambda h: (
+            -float(h["score"]),
+            str(h["culprit"]),
+            str(h["weapon"]),
+            str(h["room"]),
+            str(h["time"]),
+        )
+    )
+    # Keep top_k distinct hypotheses; GA may produce duplicates.
+    ranked: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str, str]] = set()
+    for hyp in hypotheses:
+        key = (
+            str(hyp["culprit"]),
+            str(hyp["weapon"]),
+            str(hyp["room"]),
+            str(hyp["time"]),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        ranked.append(hyp)
+        if len(ranked) >= max(top_k, 1):
+            break
 
     best_score = ranked[0]["score"] if ranked else None
     payload = {

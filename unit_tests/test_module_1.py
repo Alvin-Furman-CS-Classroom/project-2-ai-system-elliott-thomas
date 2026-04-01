@@ -276,6 +276,7 @@ class TestGenerateRandomCase(unittest.TestCase):
     def test_returns_dict_with_expected_keys(self):
         """generate_random_case should return dict with kb_evidence, witness_knowledge, metadata."""
         result = module_1.generate_random_case(RULES_PATH, seed=42)
+        self.assertEqual(result["metadata"].get("_difficulty"), "easy")
         self.assertIn("kb_evidence", result)
         self.assertIn("witness_knowledge", result)
         self.assertIn("metadata", result)
@@ -327,18 +328,23 @@ class TestGenerateRandomCase(unittest.TestCase):
         culprit_facts = [k for k in all_facts.keys() if k.startswith("Culprit_")]
         self.assertEqual(len(culprit_facts), 0, "Culprit facts should be hidden (case file)")
 
-    def test_victim_found_only_in_hall(self):
-        """VictimFound should only be True in the Hall (body discovery location)."""
+    def test_victim_found_matches_solution_room(self):
+        """VictimFound should only be True in the murder room (envelope room card)."""
         result = module_1.generate_random_case(RULES_PATH, seed=42)
+        solution_room = result["metadata"]["_solution_room"]
         all_facts = {**result["kb_evidence"], **result["witness_knowledge"]}
+        self.assertTrue(
+            result["kb_evidence"].get(f"VictimFound_{solution_room}") is True,
+            "Body discovery fact should be seeded into kb_evidence for the solution room",
+        )
         for room in module_1.read_rules(RULES_PATH)["game_constraints"]["rooms"]:
             fact = f"VictimFound_{room}"
             if fact in all_facts:
-                expected = room == "Hall"
+                expected = room == solution_room
                 self.assertEqual(
                     all_facts[fact],
                     expected,
-                    f"VictimFound_{room} should be {expected} (body discovery room is Hall)",
+                    f"VictimFound_{room} should be {expected} (only solution room is True)",
                 )
 
     def test_respects_kb_ratio(self):
@@ -358,6 +364,56 @@ class TestGenerateRandomCase(unittest.TestCase):
         weapon_fact = f"Weapon_{solution_weapon}_{solution_room}"
         self.assertIn(weapon_fact, all_facts)
         self.assertTrue(all_facts[weapon_fact], f"Murder weapon {solution_weapon} should be in murder room {solution_room}")
+
+    def test_invalid_difficulty_raises(self) -> None:
+        """Unknown difficulty values should raise ValueError."""
+        with self.assertRaises(ValueError):
+            module_1.generate_random_case(RULES_PATH, seed=0, difficulty="nightmare")
+
+    def test_metadata_records_difficulty(self) -> None:
+        """Metadata should record normalized difficulty (easy / normal)."""
+        easy = module_1.generate_random_case(RULES_PATH, seed=1, difficulty="easy")
+        norm = module_1.generate_random_case(RULES_PATH, seed=1, difficulty="normal")
+        self.assertEqual(easy["metadata"]["_difficulty"], "easy")
+        self.assertEqual(norm["metadata"]["_difficulty"], "normal")
+        cap = module_1.generate_random_case(RULES_PATH, seed=2, difficulty=" EASY ")
+        self.assertEqual(cap["metadata"]["_difficulty"], "easy")
+
+    def test_easy_reduces_innocents_in_murder_room_at_murder_time(self) -> None:
+        """Easy mode should usually keep innocents out of the murder room at murder time."""
+
+        suspects = module_1.read_rules(RULES_PATH)["game_constraints"]["suspects"]
+
+        def _count_innocents_present(case: dict) -> int:
+            meta = case["metadata"]
+            cul = meta["_solution_culprit"]
+            rroom = meta["_solution_room"]
+            mtime = meta["_solution_time"]
+            facts = {**case["kb_evidence"], **case["witness_knowledge"]}
+            return sum(
+                1
+                for s in suspects
+                if s != cul and facts.get(f"At_{s}_{rroom}_{mtime}") is True
+            )
+
+        n_trials = 150
+        easy_total = sum(
+            _count_innocents_present(
+                module_1.generate_random_case(RULES_PATH, seed=i, difficulty="easy")
+            )
+            for i in range(n_trials)
+        )
+        normal_total = sum(
+            _count_innocents_present(
+                module_1.generate_random_case(RULES_PATH, seed=i, difficulty="normal")
+            )
+            for i in range(n_trials)
+        )
+        self.assertLess(
+            easy_total,
+            normal_total,
+            "Easy difficulty should crowd the murder room at murder time less often",
+        )
 
 
 # --- run_random_case ---

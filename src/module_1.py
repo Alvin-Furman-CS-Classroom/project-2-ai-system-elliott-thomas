@@ -117,12 +117,19 @@ _NOISE_HEARD_MURDER_ROOM = 0.3  # P(no noise) in murder room at murder time
 _NOISE_HEARD_OTHER = 0.8  # P(no noise) elsewhere
 _KEY_FOUND_PROB = 0.8  # P(no key found) in a room
 
+# Easy difficulty: at murder time, innocents usually avoid the murder room so At_* facts
+# discriminate better; with the remaining probability they may still land there (soft red herring).
+_EASY_EXCLUDE_MURDER_ROOM_AT_MURDER_TIME = 0.85
+
+_VALID_DIFFICULTIES = frozenset({"normal", "easy"})
+
 
 def generate_random_case(
     rules_path: str | Path,
     seed: int | None = None,
     kb_ratio: float = 0.5,
     murder_time: str | None = None,
+    difficulty: str = "easy",
 ) -> dict:
     """Generate a random Clue case following board game initialization rules.
 
@@ -130,23 +137,35 @@ def generate_random_case(
     This function generates such a case randomly:
     1. Randomly selects culprit, weapon, room (the "case file" - hidden solution)
     2. Randomly places weapons in rooms
-    3. Randomly assigns people to locations at different times
+    3. Randomly assigns people to locations at different times (``easy``: innocents
+       at murder time usually avoid the murder room)
     4. Generates consistent facts (fingerprints, alibis, etc.)
     5. Randomly splits facts into kb_evidence (known) and witness_knowledge (queryable)
+    6. Seeds ``VictimFound_<solution_room>`` into kb_evidence (murder room = envelope room card)
 
     Args:
         rules_path: Path to rules.json (to get game_constraints).
         seed: Optional random seed for reproducibility.
         kb_ratio: Fraction of facts to put in kb_evidence (rest go to witness_knowledge).
         murder_time: Optional specific time for murder (default: random from time_points).
+        difficulty: ``"easy"`` (default) or ``"normal"``. In ``"easy"``, non-culprits at
+            murder time avoid the murder room with probability
+            ``_EASY_EXCLUDE_MURDER_ROOM_AT_MURDER_TIME`` (otherwise full random room).
 
     Returns:
         dict with keys kb_evidence, witness_knowledge, metadata.
         Same structure as read_case_init() for compatibility.
-        Metadata includes _solution_culprit, _solution_weapon, _solution_room.
+        Metadata includes ``_difficulty``, ``_solution_culprit``, ``_solution_weapon``,
+        ``_solution_room``, ``_solution_time``.
     """
     if seed is not None:
         random.seed(seed)
+
+    difficulty_norm = difficulty.strip().lower()
+    if difficulty_norm not in _VALID_DIFFICULTIES:
+        raise ValueError(
+            f"difficulty must be one of {sorted(_VALID_DIFFICULTIES)}, got {difficulty!r}"
+        )
 
     rules = read_rules(rules_path)
     constraints = rules.get("game_constraints", {})
@@ -216,6 +235,14 @@ def generate_random_case(
             # else (and other times) are placed randomly.
             if person == culprit and time == murder_time:
                 loc = room
+            elif (
+                difficulty_norm == "easy"
+                and time == murder_time
+                and person != culprit
+                and random.random() < _EASY_EXCLUDE_MURDER_ROOM_AT_MURDER_TIME
+            ):
+                other_rooms = [r for r in rooms if r != room]
+                loc = random.choice(other_rooms) if other_rooms else random.choice(rooms)
             else:
                 loc = random.choice(rooms)
             person_locations[(person, time)] = loc
@@ -270,16 +297,14 @@ def generate_random_case(
     kb_evidence = dict(fact_items[:kb_size])
     witness_knowledge = dict(fact_items[kb_size:])
 
-    # Ensure the fact about where the body was found is known up front.
-    # In this variant, the body is always discovered in the Hall.
-    body_fact = "VictimFound_Hall"
+    # Murder / body discovery room matches the secret room card (same as `_solution_room`).
+    body_fact = f"VictimFound_{room}"
     # Remove from witness_knowledge if present (so Module 2 can't waste a query).
     witness_knowledge.pop(body_fact, None)
     # Force in kb_evidence as True (overwrite any previous split result).
     kb_evidence[body_fact] = True
 
     # Remove other VictimFound_* from witness_knowledge so Module 2 does not query them.
-    # (body was found in exactly one room; in this variant it's always Hall).
     for r in rooms:
         other = f"VictimFound_{r}"
         if other != body_fact:
@@ -293,6 +318,7 @@ def generate_random_case(
             "timestamp": "2024-01-15T21:00:00Z",
             "investigator": "Detective_AI",
             "generated": True,
+            "_difficulty": difficulty_norm,
             "_solution_culprit": culprit,
             "_solution_weapon": weapon,
             "_solution_room": room,
@@ -486,6 +512,7 @@ def run_random_case(
     seed: int | None = None,
     kb_ratio: float = 0.5,
     murder_time: str | None = None,
+    difficulty: str = "easy",
     show_case_view: bool = False,
 ) -> dict:
     """Generate a random case and run Module 1 pipeline on it.
@@ -502,11 +529,18 @@ def run_random_case(
         seed: Optional random seed for reproducibility.
         kb_ratio: Fraction of facts to put in kb_evidence.
         murder_time: Optional specific time for murder.
+        difficulty: Passed to :func:`generate_random_case` (default ``"easy"``; use ``"normal"`` for harder cases).
 
     Returns:
         dict with case data (kb_evidence, witness_knowledge, metadata) and solution info.
     """
-    case = generate_random_case(rules_path, seed=seed, kb_ratio=kb_ratio, murder_time=murder_time)
+    case = generate_random_case(
+        rules_path,
+        seed=seed,
+        kb_ratio=kb_ratio,
+        murder_time=murder_time,
+        difficulty=difficulty,
+    )
     rules = read_rules(rules_path)
     kb = build_kb(case["kb_evidence"])
     all_rules = ground_all_rules(rules["rules"], rules["game_constraints"])

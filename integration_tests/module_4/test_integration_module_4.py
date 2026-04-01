@@ -2,6 +2,9 @@
 
 Runs the Modules 1→2→3 pipeline on a randomly generated case, then calls
 Module 4 using Module 3 outputs.
+
+Module 2 must write ``hypothesis_summary.json`` (joint ``best_guess``) so module 3
+can inject ``Likely*`` facts into the FOL KB before module 4 ranks hypotheses.
 """
 
 from __future__ import annotations
@@ -9,6 +12,10 @@ from __future__ import annotations
 import json
 import unittest
 from pathlib import Path
+
+from integration_tests.hypothesis_summary_asserts import (
+    assert_joint_best_guess_matches_top_hypothesis,
+)
 
 from src import module_1, module_2, module_3, module_4
 from src.case_viewer import (
@@ -40,11 +47,14 @@ OPTIMIZATION_LOG_PATH = _OUTPUT_DIR / "optimization_log.txt"
 
 class TestModule4Integration(unittest.TestCase):
     def test_full_pipeline_module1_then_2_then_3_then_4(self) -> None:
+        difficulty = "easy"  # "easy" or "normal"
+
         case = module_1.run_random_case(
             rules_path=RULES_PATH,
             output_dir=_PIPELINE_DIR,
-            seed=202,
-            kb_ratio=0.4,
+            seed=20, #change what seed you use to see different cases
+            kb_ratio=0.60, #anything lower than 0.60 will cause the model to get stuff wrong
+            difficulty=difficulty,
         )
         self.assertTrue(EVIDENCE_PATH.exists(), "module_1 should create evidence_found.json")
 
@@ -55,14 +65,19 @@ class TestModule4Integration(unittest.TestCase):
         witness_knowledge = case["witness_knowledge"]
         self.assertGreater(len(witness_knowledge), 0, "Expected witness knowledge")
 
-        module_2.run_search(
+        search_result = module_2.run_search(
             evidence_path=EVIDENCE_PATH,
             witness_knowledge=witness_knowledge,
-            query_budget=100,
+            query_budget=150, #how many questions the model will ask
             output_dir=_PIPELINE_DIR,
-            beam_width=3,
+            beam_width=10, #how many different paths the model will explore
             rules_path=RULES_PATH,
         )
+        hyp_summary_path = _PIPELINE_DIR / "hypothesis_summary.json"
+        self.assertTrue(hyp_summary_path.exists(), "Module 2 should write hypothesis_summary.json")
+        self.assertIsNotNone(search_result.get("hypothesis_summary"))
+        with open(hyp_summary_path, encoding="utf-8") as f:
+            assert_joint_best_guess_matches_top_hypothesis(self, json.load(f))
 
         module_3.run(
             evidence_path=EVIDENCE_PATH,

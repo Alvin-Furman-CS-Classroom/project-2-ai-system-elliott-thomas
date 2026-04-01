@@ -7,10 +7,12 @@ This integration test writes its output to:
     integration_tests/module_2/output_test_files/
 
 Output files (consolidated in one directory):
-    - evidence_found.json (from module_1.run_random_case)
+    - evidence_found.json (from module_1.run_random_case; updated in place by module_2)
     - query_plan.json (from module_2.run_search)
     - observations.json (from module_2.run_search)
     - search_trace.txt (from module_2.run_search)
+    - hypothesis_summary.json (when rules resolve: joint best_guess for culprit/weapon/room,
+      optional time from At_* facts — used downstream by module_3 for Likely* propositions)
 
 You can manually inspect the results after running the tests.
 """
@@ -18,6 +20,10 @@ You can manually inspect the results after running the tests.
 import json
 import unittest
 from pathlib import Path
+
+from integration_tests.hypothesis_summary_asserts import (
+    assert_joint_best_guess_matches_top_hypothesis,
+)
 
 from src import module_1, module_2
 
@@ -52,6 +58,7 @@ class TestModule2Integration(unittest.TestCase):
             query_budget=10,
             output_dir=_OUTPUT_DIR,
             beam_width=3,
+            rules_path=RULES_PATH,
         )
 
         self.assertIn("query_plan", result)
@@ -80,6 +87,13 @@ class TestModule2Integration(unittest.TestCase):
         search_trace_path = _OUTPUT_DIR / "search_trace.txt"
         self.assertTrue(search_trace_path.exists())
 
+        hyp_path = _OUTPUT_DIR / "hypothesis_summary.json"
+        self.assertTrue(hyp_path.exists(), "hypothesis_summary.json should be written when rules_path is set")
+        self.assertIsNotNone(result.get("hypothesis_summary"))
+        with open(hyp_path, encoding="utf-8") as f:
+            hyp_payload = json.load(f)
+        assert_joint_best_guess_matches_top_hypothesis(self, hyp_payload)
+
     def test_full_pipeline_module1_then_module2_produces_search_outputs(self) -> None:
         """Run module_1.run_random_case() then module_2.run_search(); search outputs should be produced."""
         result = module_1.run_random_case(
@@ -102,6 +116,7 @@ class TestModule2Integration(unittest.TestCase):
             query_budget=10,
             output_dir=_OUTPUT_DIR,
             beam_width=3,
+            rules_path=RULES_PATH,
         )
 
         self.assertIn("query_plan", search_result)
@@ -112,6 +127,10 @@ class TestModule2Integration(unittest.TestCase):
         self.assertTrue((_OUTPUT_DIR / "query_plan.json").exists())
         self.assertTrue((_OUTPUT_DIR / "observations.json").exists())
         self.assertTrue((_OUTPUT_DIR / "search_trace.txt").exists())
+        self.assertTrue((_OUTPUT_DIR / "hypothesis_summary.json").exists())
+        self.assertIsNotNone(search_result.get("hypothesis_summary"))
+        with open(_OUTPUT_DIR / "hypothesis_summary.json", encoding="utf-8") as f:
+            assert_joint_best_guess_matches_top_hypothesis(self, json.load(f))
 
         with open(_OUTPUT_DIR / "query_plan.json", encoding="utf-8") as f:
             query_plan_data = json.load(f)
@@ -138,11 +157,15 @@ class TestModule2Integration(unittest.TestCase):
             query_budget=10,
             output_dir=_OUTPUT_DIR,
             beam_width=3,
+            rules_path=RULES_PATH,
         )
 
         self.assertIn("query_plan", result)
         self.assertIn("observations", result)
         self.assertIn("search_trace", result)
+        self.assertIsNotNone(result.get("hypothesis_summary"))
+        with open(_OUTPUT_DIR / "hypothesis_summary.json", encoding="utf-8") as f:
+            assert_joint_best_guess_matches_top_hypothesis(self, json.load(f))
 
         query_plan_path = _OUTPUT_DIR / "query_plan.json"
         self.assertTrue(query_plan_path.exists(), "query_plan.json should be created")
@@ -196,6 +219,7 @@ class TestModule2Integration(unittest.TestCase):
             query_budget=3,
             output_dir=_OUTPUT_DIR,
             beam_width=3,
+            rules_path=RULES_PATH,
         )
 
         search_trace = result["search_trace"]

@@ -319,6 +319,81 @@ class TestRunSearch(unittest.TestCase):
             self.assertIn("query_plan", result)
 
 
+# --- _summarize_hypotheses (joint best_guess) ---
+
+
+class TestSummarizeHypotheses(unittest.TestCase):
+    """Tests for joint best_guess vs per-axis marginals."""
+
+    def test_best_guess_matches_top_joint_triple_unique_winner(self) -> None:
+        """best_guess should be the highest-support (culprit, weapon, room) triple."""
+        gc = {
+            "suspects": ["Alice", "Bob"],
+            "weapons": ["W1", "W2"],
+            "rooms": ["R1", "R2"],
+        }
+        kb = {
+            "Weapon_W1_R1": True,
+            "At_Alice_R1_9pm": True,
+            "Fingerprints_R1_Alice": True,
+            "VictimFound_R1": True,
+            "BloodStains_R1": True,
+        }
+        out = module_2._summarize_hypotheses(kb, gc)
+        self.assertEqual(out["hypotheses"][0]["support"], 7)
+        self.assertEqual(out["best_guess"]["culprit"], "Alice")
+        self.assertEqual(out["best_guess"]["weapon"], "W1")
+        self.assertEqual(out["best_guess"]["room"], "R1")
+        self.assertEqual(out["best_guess"].get("time"), "9pm")
+
+    def test_best_guess_tie_break_lexicographic(self) -> None:
+        """When two triples tie on support, pick deterministic lexicographic order."""
+        gc = {
+            "suspects": ["Alice", "Bob"],
+            "weapons": ["W1", "W2"],
+            "rooms": ["R1", "R2"],
+        }
+        kb = {
+            "Weapon_W1_R1": True,
+            "At_Alice_R1_9pm": True,
+            "Fingerprints_R1_Alice": True,
+            "VictimFound_R1": True,
+            "BloodStains_R1": True,
+            "Weapon_W2_R2": True,
+            "At_Bob_R2_9pm": True,
+            "Fingerprints_R2_Bob": True,
+            "VictimFound_R2": True,
+            "BloodStains_R2": True,
+        }
+        out = module_2._summarize_hypotheses(kb, gc)
+        top_a = next(h for h in out["hypotheses"] if h["culprit"] == "Alice" and h["room"] == "R1")
+        top_b = next(h for h in out["hypotheses"] if h["culprit"] == "Bob" and h["room"] == "R2")
+        self.assertEqual(top_a["support"], top_b["support"])
+        self.assertEqual(out["best_guess"]["culprit"], "Alice")
+        self.assertEqual(out["best_guess"]["weapon"], "W1")
+        self.assertEqual(out["best_guess"]["room"], "R1")
+
+    def test_best_guess_matches_hypotheses_leader(self) -> None:
+        """Invariant: best_guess always matches the first sorted joint hypothesis."""
+        gc = {
+            "suspects": ["Alice", "Bob"],
+            "weapons": ["W1", "W2"],
+            "rooms": ["R1", "R2"],
+        }
+        kb = {
+            "Weapon_W1_R1": True,
+            "At_Alice_R1_9pm": True,
+            "Fingerprints_R1_Alice": True,
+            "VictimFound_R1": True,
+            "BloodStains_R1": True,
+        }
+        out = module_2._summarize_hypotheses(kb, gc)
+        lead = out["hypotheses"][0]
+        self.assertEqual(out["best_guess"]["culprit"], lead["culprit"])
+        self.assertEqual(out["best_guess"]["weapon"], lead["weapon"])
+        self.assertEqual(out["best_guess"]["room"], lead["room"])
+
+
 if __name__ == "__main__":
     unittest.main()
 

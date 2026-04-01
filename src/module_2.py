@@ -342,6 +342,28 @@ def write_search_outputs(
                 f.write("  *** GOAL REACHED: Culprit, weapon, and room identified! ***\n")
 
 
+def _best_time_for_culprit_room(
+    culprit: str,
+    room: str,
+    kb: Dict[str, bool],
+) -> str | None:
+    """Pick a time from `At_culprit_room_time` facts in the KB, if any.
+
+    Deterministic: returns the lexicographically smallest time when multiple
+    `At` facts exist for the same (culprit, room).
+    """
+    prefix = f"At_{culprit}_{room}_"
+    times: list[str] = []
+    for prop, val in kb.items():
+        if not val:
+            continue
+        if prop.startswith(prefix):
+            times.append(prop[len(prefix) :])
+    if not times:
+        return None
+    return sorted(times)[0]
+
+
 def _summarize_hypotheses(
     kb: Dict[str, bool],
     game_constraints: dict,
@@ -354,6 +376,9 @@ def _summarize_hypotheses(
     - Scores each triple by counting supporting facts in the KB
       (At_, Weapon_, VictimFound_, BloodStains_, Fingerprints_).
     - Aggregates scores into per-suspect / per-weapon / per-room tallies.
+    - Sets ``best_guess`` to the **joint** highest-support triple (not the
+      independent per-axis marginals), with deterministic tie-breaks and an
+      optional ``time`` from matching ``At`` facts when present.
     """
     suspects: list[str] = list(game_constraints.get("suspects", []))
     weapons: list[str] = list(game_constraints.get("weapons", []))
@@ -416,8 +441,10 @@ def _summarize_hypotheses(
                     }
                 )
 
-    # Sort by support descending and keep top few.
-    hypotheses.sort(key=lambda h: h["support"], reverse=True)
+    # Sort by support descending, then lexicographic tie-break for determinism.
+    hypotheses.sort(
+        key=lambda h: (-h["support"], h["culprit"], h["weapon"], h["room"]),
+    )
     top_hypotheses = hypotheses[:10]
 
     culprit_scores: Dict[str, float] = {}
@@ -428,16 +455,15 @@ def _summarize_hypotheses(
         weapon_scores[h["weapon"]] = weapon_scores.get(h["weapon"], 0.0) + h["support"]
         room_scores[h["room"]] = room_scores.get(h["room"], 0.0) + h["support"]
 
-    def _best_key(scores: Dict[str, float]) -> str | None:
-        if not scores:
-            return None
-        return max(scores.items(), key=lambda item: item[1])[0]
-
-    best_guess = {
-        "culprit": _best_key(culprit_scores),
-        "weapon": _best_key(weapon_scores),
-        "room": _best_key(room_scores),
+    top = hypotheses[0]
+    best_guess: Dict[str, str] = {
+        "culprit": top["culprit"],
+        "weapon": top["weapon"],
+        "room": top["room"],
     }
+    best_time = _best_time_for_culprit_room(top["culprit"], top["room"], kb)
+    if best_time is not None:
+        best_guess["time"] = best_time
 
     return {
         "hypotheses": top_hypotheses,

@@ -731,8 +731,7 @@ if __name__ == "__main__":
         if solution4.get("weapon") and solution4.get("room"):
             evidence4[f"Weapon_{solution4['weapon']}_{solution4['room']}"] = True
         if solution4.get("room"):
-            # Body discovery location is fixed to Hall in Module 1.
-            # Module 4 hypothesis is interpreted as the dragged-from (murder) room.
+            # Align dragged-body visualization with the hypothesized murder room.
             for k in list(evidence4.keys()):
                 if k.startswith("BodyDraggedFrom_"):
                     evidence4.pop(k, None)

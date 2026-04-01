@@ -15,11 +15,18 @@ Output files (consolidated in one directory):
 It builds on the module_2 integration test by running:
     module_1.run_random_case() -> module_2.run_search() -> module_3.run()
 on a randomly generated case.
+
+Module 2 writes ``hypothesis_summary.json`` beside ``evidence_found.json`` (joint
+``best_guess`` for Likely* seeding in module FOL).
 """
 
 import json
 import unittest
 from pathlib import Path
+
+from integration_tests.hypothesis_summary_asserts import (
+    assert_joint_best_guess_matches_top_hypothesis,
+)
 
 from src import module_1, module_2, module_3
 from src.case_viewer import (
@@ -91,6 +98,12 @@ class TestModule3Integration(unittest.TestCase):
             beam_width=3,
             rules_path=RULES_PATH,
         )
+
+        hyp_summary_path = _PIPELINE_DIR / "hypothesis_summary.json"
+        self.assertTrue(hyp_summary_path.exists(), "Module 2 should write hypothesis_summary.json")
+        self.assertIsNotNone(search_result.get("hypothesis_summary"))
+        with open(hyp_summary_path, encoding="utf-8") as f:
+            assert_joint_best_guess_matches_top_hypothesis(self, json.load(f))
 
         # Build final_kb after Module 2 (evidence1 + observations, including NOT_ for False).
         final_kb = dict(evidence1)
