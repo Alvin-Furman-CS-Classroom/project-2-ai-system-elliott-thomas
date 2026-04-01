@@ -1,4 +1,11 @@
-"""Module 3: First-Order Logic evidence store and inference."""
+"""Module 3: First-Order Logic evidence store and inference.
+
+Turns the game's flat proposition names (like ``At_ColonelMustard_Study_9pm``) into
+structured facts (predicate plus arguments), then runs forward chaining: it repeatedly
+applies rules from ``rules.json`` to derive any new facts that logically follow,
+recording how each new fact was proved. Optional outputs are a full FOL knowledge
+base file and an inferred-facts file with proof steps for downstream modules.
+"""
 # Thomas Corbin and Elliott Chmil
 # Written with the help of Cursor Agent
 
@@ -11,22 +18,35 @@ _ROOM1_EQ_ROOM2 = "ROOM1_EQ_ROOM2"
 
 
 def _fol_fact_key(fol: dict) -> str:
-    """Produce a unique key for an FOL fact (predicate:arg1:arg2:...)."""
+    """Build a single string that uniquely identifies this fact for duplicate checks.
+
+    The key is the predicate followed by every argument, separated by colons, so two
+    facts match if and only if they are the same ground atom.
+    """
     pred = fol.get("predicate", "")
     args = fol.get("args", [])
     return pred + ":" + ":".join(str(a) for a in args)
 
 
 def _is_positive_fact(fol: dict) -> bool:
-    """True if fol is a known positive fact (value=True, not negated)."""
+    """Return whether this entry counts as a normal ``true`` fact we can chain from.
+
+    Negative literals (``negated``) and unknown values are not treated as usable premises.
+    """
     return fol.get("value") is True and not fol.get("negated")
 
 
 def _parse_proposition(proposition: str) -> tuple[str, list[str], bool]:
-    """Parse propositional name into (predicate, args, negated).
+    """Split a Module-1-style proposition string into predicate, arguments, and negation.
 
-    E.g. 'At_ColonelMustard_Study_9pm' -> ('At', ['ColonelMustard', 'Study', '9pm'], False)
-         'NOT_Culprit_MissScarlet_9pm' -> ('Culprit', ['MissScarlet', '9pm'], True)
+    Underscores separate the predicate from its arguments. A leading ``NOT_`` means the
+    literal is negated; the returned ``negated`` flag captures that.
+
+    Examples:
+        ``At_ColonelMustard_Study_9pm`` → predicate ``At``, args
+        ``[ColonelMustard, Study, 9pm]``, not negated.
+        ``NOT_Culprit_MissScarlet_9pm`` → predicate ``Culprit``, args ``[MissScarlet, 9pm]``,
+        negated.
     """
     negated = proposition.startswith(_NOT_PREFIX)
     if negated:
@@ -40,7 +60,10 @@ def _parse_proposition(proposition: str) -> tuple[str, list[str], bool]:
 
 
 def _to_fol_form(predicate: str, args: list[str], negated: bool) -> dict:
-    """Convert parsed proposition to FOL-style structure."""
+    """Package a predicate and its argument list into the small dict shape the rest of the module expects.
+
+    Sets ``negated`` only when the literal is negative.
+    """
     fol = {"predicate": predicate, "args": args}
     if negated:
         fol["negated"] = True
@@ -51,11 +74,12 @@ def create_fol_propositions(
     evidence: dict,
     output_path: str | Path | None = None,
 ) -> list[dict]:
-    """Create first-order propositions from the KB evidence and record as output.
+    """Walk every fact in the evidence dictionary and convert it to structured FOL records.
 
-    Parses each propositional fact (e.g. At_ColonelMustard_Study_9pm) into
-    FOL form (predicate, args, negated) and records them. Optionally writes
-    to output_path (e.g. kb_fol.json).
+    Each key is a proposition name from earlier modules; each value should be ``True`` for
+    known facts. The function attaches ``value`` and the original string as ``propositional``
+    so you can trace a row back to the KB. If ``output_path`` is given, the full list is
+    also written as JSON (for example ``kb_fol.json``).
 
     Args:
         evidence: Dict of proposition name -> True (KB facts).
@@ -79,11 +103,17 @@ def create_fol_propositions(
 
 
 def _parse_rule_template(template: str) -> tuple[str, list[str], bool, bool]:
-    """Parse a rule template into (predicate, arg_names, negated, is_constraint).
+    """Turn a rule's template string from ``rules.json`` into its logical pieces.
 
-    E.g. 'At_PERSON_ROOM_TIME' -> ('At', ['PERSON','ROOM','TIME'], False, False)
-         'NOT_Culprit_PERSON_TIME' -> ('Culprit', ['PERSON','TIME'], True, False)
-         'NOT_ROOM1_EQ_ROOM2' -> ('ROOM1_EQ_ROOM2', ['ROOM1','ROOM2'], True, True)
+    Templates use underscores: the first token is the predicate name, the rest are
+    variable names (placeholders like ``PERSON``) that will later be filled from
+    matching facts. The fourth return value marks special inequality constraints
+    (``ROOM1`` must differ from ``ROOM2``) rather than ordinary premises.
+
+    Examples:
+        ``At_PERSON_ROOM_TIME`` → predicate ``At``, arg names ``[PERSON, ROOM, TIME]``.
+        ``NOT_Culprit_PERSON_TIME`` → negated ``Culprit`` with two variables.
+        ``NOT_ROOM1_EQ_ROOM2`` → constraint template for two different rooms.
     """
     negated = template.startswith(_NOT_PREFIX)
     if negated:
@@ -99,7 +129,12 @@ def _parse_rule_template(template: str) -> tuple[str, list[str], bool, bool]:
 
 
 def _unify(ground_fact: dict, predicate: str, arg_names: list[str]) -> dict | None:
-    """Check if ground fact matches template; return substitution or None."""
+    """If this concrete fact matches the template's predicate and arity, return variable bindings.
+
+    Bindings map each template variable (e.g. ``PERSON``) to the actual constant from the
+    fact (e.g. ``MissScarlet``). If the predicate or length of arguments does not match,
+    return ``None``.
+    """
     if ground_fact.get("predicate") != predicate:
         return None
     args = ground_fact.get("args", [])
@@ -109,7 +144,11 @@ def _unify(ground_fact: dict, predicate: str, arg_names: list[str]) -> dict | No
 
 
 def _merge_substitutions(sub1: dict, sub2: dict) -> dict | None:
-    """Merge two substitutions; return None if conflicting bindings."""
+    """Combine two partial bindings from different premises into one mapping.
+
+    If the same variable would be bound to two different constants, the merge fails and
+    the function returns ``None`` so that rule application can discard that combination.
+    """
     merged = dict(sub1)
     for k, v in sub2.items():
         if k in merged:
@@ -121,13 +160,21 @@ def _merge_substitutions(sub1: dict, sub2: dict) -> dict | None:
 
 
 def _apply_substitution(predicate: str, arg_names: list[str], substitution: dict) -> dict:
-    """Apply substitution to template to produce ground fact."""
+    """Instantiate a template (predicate plus variable names) to one fully ground fact.
+
+    Each variable name in ``arg_names`` is replaced by its value from ``substitution``;
+    any name still missing is left as-is (rare in practice).
+    """
     args = [substitution.get(a, a) for a in arg_names]
     return {"predicate": predicate, "args": args}
 
 
 def _constraint_satisfied(template_predicate: str, substitution: dict) -> bool:
-    """Check constraint premises (e.g. NOT_ROOM1_EQ_ROOM2 means ROOM1 != ROOM2)."""
+    """Return whether side constraints for a rule are met given the current bindings.
+
+    For example, a ``ROOM1_EQ_ROOM2`` constraint under negation requires the two room
+    slots to be different actual room names; otherwise the rule should not fire.
+    """
     if template_predicate == _ROOM1_EQ_ROOM2:
         room1, room2 = substitution.get("ROOM1"), substitution.get("ROOM2")
         return room1 is not None and room2 is not None and room1 != room2
@@ -135,7 +182,11 @@ def _constraint_satisfied(template_predicate: str, substitution: dict) -> bool:
 
 
 def _make_inferred_fol_entry(fact: dict) -> dict:
-    """Build FOL entry dict for an inferred fact."""
+    """Format a newly derived ground fact so it can be appended to the live FOL list.
+
+    Marks it as ``inferred`` and synthesizes a propositional-style name from predicate
+    and arguments for readability.
+    """
     pred, args = fact["predicate"], fact["args"]
     return {
         "predicate": pred,
@@ -149,7 +200,10 @@ def _make_inferred_fol_entry(fact: dict) -> dict:
 def _make_inferred_proof(
     conclusion: dict, rule_id: str, bindings: dict, premise_facts: list[dict]
 ) -> dict:
-    """Build proof-step dict for an inferred fact."""
+    """Record how a conclusion was obtained: which rule fired, with what bindings and premises.
+
+    Used for the ``inferred_facts`` output so you can audit or explain each derivation.
+    """
     return {
         "fact": conclusion,
         "rule_id": rule_id,
@@ -162,11 +216,13 @@ def infer_fol(
     fol_propositions: list[dict],
     rules: list[dict],
 ) -> tuple[list[dict], list[dict]]:
-    """Apply FOL forward chaining to derive new facts from rules.
+    """Repeatedly apply inference rules until no new positive facts appear (fixpoint).
 
-    Uses unification to match ground FOL facts against rule premises;
-    when all premises are satisfied with consistent variable bindings,
-    derives the conclusion. Each inferred fact includes proof steps.
+    In plain terms: for each rule, the code looks for combinations of already-known facts
+    that match all ``if`` clauses at once, with the same person/room/time variables tied
+    together across clauses. When that happens and any ``not`` or inequality checks pass,
+    it adds the rule's ``then`` conclusion to the knowledge base. Proof records are built
+    every time a new fact is added.
 
     Args:
         fol_propositions: List of FOL dicts with predicate, args, value (true).
@@ -249,7 +305,7 @@ def infer_fol(
 
 
 def _write_json(data: dict, path: str | Path) -> None:
-    """Write dict as JSON to path, creating parent dirs if needed."""
+    """Save ``data`` as pretty-printed UTF-8 JSON, creating any missing parent folders."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
@@ -257,10 +313,10 @@ def _write_json(data: dict, path: str | Path) -> None:
 
 
 def write_inferred_facts(inferred_facts: list[dict], output_path: str | Path) -> None:
-    """Write inferred facts with proof steps to JSON file.
+    """Persist every inferred fact and its proof metadata to ``inferred_facts.json`` (or similar).
 
-    The output includes a small summary for readability plus the full list of
-    proof-carrying inferred facts.
+    At the top level the file includes a short ``summary`` (counts per predicate) so a
+    human can skim the file, plus the full ``inferred_facts`` list with rule ids and premises.
 
     Args:
         inferred_facts: List of {fact, rule_id, variable_bindings, premise_facts}.
@@ -289,7 +345,10 @@ def load_evidence_and_rules(
     evidence_path: str | Path,
     rules_path: str | Path,
 ) -> dict:
-    """Load evidence gathered from module_2 and rules from rules.json.
+    """Read the case evidence file and the rule set, and return one combined dictionary.
+
+    This keeps all inputs to Module 3 in one place: facts Module 1/2 already collected,
+    any witness-query trace, game metadata, and the full rules plus constraints from ``rules.json``.
 
     Args:
         evidence_path: Path to evidence_found.json (written by module_1 + module_2).
@@ -330,16 +389,22 @@ def run(
     inferred_facts_path: str | Path | None = None,
     show_case_view: bool = False,
 ) -> dict:
-    """Run full Module 3 pipeline: load, create FOL propositions, infer, write.
+    """End-to-end Module 3: load evidence and rules, build FOL, run inference, optionally save and visualize.
+
+    Steps in order: merge in ``Likely*`` priors from a Module 2 ``hypothesis_summary.json`` when
+    present; convert the evidence map to FOL rows; run forward chaining; write the extended KB
+    and/or inferred facts when paths are provided; optionally open the case viewer.
 
     Args:
-        evidence_path: Path to evidence_found.json.
-        rules_path: Path to rules.json.
-        kb_fol_path: Optional path for kb_fol.json (extended with inferred facts).
-        inferred_facts_path: Optional path for inferred_facts.json.
+        evidence_path: Path to ``evidence_found.json`` (facts from earlier modules).
+        rules_path: Path to ``rules.json`` (inference rules and game constraints).
+        kb_fol_path: If set, write the full FOL KB (including inferred rows) here.
+        inferred_facts_path: If set, write proof-carrying inferred facts here.
+        show_case_view: If true, launch the interactive case viewer for this state.
 
     Returns:
-        dict with fol_propositions, inferred_facts, metadata.
+        Dictionary with ``fol_propositions`` (all facts after inference), ``inferred_facts``
+        (proof steps only), and ``metadata`` copied from the evidence file.
     """
     data = load_evidence_and_rules(evidence_path, rules_path)
 

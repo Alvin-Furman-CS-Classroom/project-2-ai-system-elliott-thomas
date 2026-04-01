@@ -1,16 +1,21 @@
-"""Module 4: Basic hypothesis generator over culprit/weapon/room/time.
+"""Module 4: Rank who did it, with what, where, and when.
 
-This is an initial "optimization-lite" module intended to feed later modules
-(Advanced Search / RL) with a ranked set of candidate hypotheses.
+The module searches over combinations of culprit, weapon, room, and time. It scores each
+candidate against Module 3's FOL facts and inferred facts using simple weighted evidence
+(and penalties for things like alibis). It usually explores with a genetic algorithm; when
+the total number of combinations is small, it scores every combination exactly so the ranking
+is deterministic. Results are written for later modules plus a human-readable log.
 
 Inputs:
-- `kb_fol.json` produced by Module 3
-- `inferred_facts.json` produced by Module 3
+    - ``kb_fol.json`` from Module 3
+    - ``inferred_facts.json`` from Module 3
 
 Outputs:
-- `hypotheses_ranked.json`
-- `optimization_log.txt`
+    - ``hypotheses_ranked.json``
+    - ``optimization_log.txt``
 """
+# Thomas Corbin and Elliott Chmil
+# Written with the help of Cursor Agent
 
 from __future__ import annotations
 
@@ -18,26 +23,47 @@ import json
 import itertools
 import random
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Tuple
+from typing import Any, Dict, Iterable
 
-_LIKELY_PRIOR_WEIGHT = 35.0
-_GLOBAL_NOT_CULPRIT_PENALTY = 8.0
-_GLOBAL_ALIBI_PENALTY = 6.0
-_EXACT_ENUM_MAX = 50000
+# --- Scoring and search hyperparameters (avoid magic numbers in `_score_hypothesis`) ---
+
+_LIKELY_PRIOR_WEIGHT = 35.0  # Bonus when a slot matches Module 2 Likely* priors
+_GLOBAL_NOT_CULPRIT_PENALTY = 8.0  # Per NOT_Culprit entry in KB for this person
+_GLOBAL_ALIBI_PENALTY = 6.0  # Per Alibi fact for this person (soft tie-break)
+_EXACT_ENUM_MAX = 50_000  # Above this joint size, skip full enumeration
+
+_SCORE_KB_CONTRADICTION = -1000.0  # KB marked inconsistent; all hypotheses bad
+_SCORE_HARD_NOT_AT = -100.0  # Explicit NOT At(culprit, room, time)
+_SCORE_HARD_NOT_CULPRIT_TIME = -100.0  # Explicit NOT Culprit(culprit, time)
+_SCORE_HARD_ALIBI_TIME = -75.0  # Alibi(culprit, time) rules out culprit at that time
+_SCORE_MATCH_AT = 30.0  # Positive At(culprit, room, time)
+_SCORE_MATCH_WEAPON = 30.0  # Positive Weapon(weapon, room)
+_SCORE_MATCH_CULPRIT = 30.0  # Positive Culprit(culprit, time) if present
+_SCORE_BODY_DRAGGED_FROM = 40.0  # Strongest room signal when present
+_SCORE_MURDER_LOCATION = 30.0  # MurderLocation(room)
+_SCORE_VICTIM_FOUND = 5.0  # Weaker room hint (partially fixed in Module 1)
+_SCORE_INFERRED_AT = 20.0  # Module 3 inferred At (possibly with TIME wildcard)
+
+
+# --- FOL / KB indexing ---
 
 
 def _load_json(path: str | Path) -> dict:
+    """Read a JSON file as UTF-8 and return the top-level object (expected to be a dict)."""
     path = Path(path)
     with open(path, encoding="utf-8") as f:
         return json.load(f)
 
 
 def _index_fol_entries(fol_propositions: list[dict]) -> tuple[dict, dict]:
-    """Index FOL entries by predicate and negation.
+    """Split all FOL rows into "positive" and "negative" lookup tables for fast scoring.
+
+    For each predicate you get a map from the tuple of arguments to the original proposition
+    string (for traceability). Negated literals go in the negative index; everything else in
+    the positive one.
 
     Returns:
-        (pos_index, neg_index)
-        where each index is: predicate -> args_tuple -> propositional_string
+        ``(pos_index, neg_index)`` — each maps predicate → (args tuple → propositional string).
     """
     pos_index: dict[str, dict[tuple[str, ...], str]] = {}
     neg_index: dict[str, dict[tuple[str, ...], str]] = {}
@@ -55,6 +81,10 @@ def _index_fol_entries(fol_propositions: list[dict]) -> tuple[dict, dict]:
 
 
 def _index_inferred_facts(inferred_facts: list[dict]) -> set[tuple[str, tuple[str, ...]]]:
+    """Turn Module 3 proof entries into a set of (predicate, arguments) pairs we can test quickly.
+
+    Used to give a small bonus when inference derived ``At`` (including wildcard time).
+    """
     inferred_keys: set[tuple[str, tuple[str, ...]]] = set()
     for entry in inferred_facts:
         fact = entry.get("fact", {})
@@ -67,6 +97,10 @@ def _index_inferred_facts(inferred_facts: list[dict]) -> set[tuple[str, tuple[st
 
 
 def _extract_unique_args(fol_propositions: list[dict], predicate: str, arg_idx: int) -> set[str]:
+    """Gather every distinct constant appearing in slot ``arg_idx`` for a given predicate.
+
+    Example: predicate ``At`` with index ``0`` collects all people mentioned in ``At`` facts.
+    """
     out: set[str] = set()
     for fol in fol_propositions:
         if fol.get("predicate") != predicate:
@@ -79,6 +113,11 @@ def _extract_unique_args(fol_propositions: list[dict], predicate: str, arg_idx: 
 
 
 def _extract_time_candidates_from_at(fol_propositions: list[dict]) -> set[str]:
+    """Collect possible clock times from three-argument ``At`` facts (person, room, time).
+
+    Ignores the placeholder string ``TIME`` because that marks an unknown time in some encodings,
+    not a real candidate instant.
+    """
     times: set[str] = set()
     for fol in fol_propositions:
         if fol.get("predicate") != "At":
@@ -97,6 +136,11 @@ def _extract_time_candidates_from_at(fol_propositions: list[dict]) -> set[str]:
 def _extract_likely_constants(
     pos_index: dict,
 ) -> tuple[set[str], set[str], set[str]]:
+    """Pull Module 2 "best guess" priors from ``LikelyCulprit``, ``LikelyWeapon``, ``LikelyRoom`` facts.
+
+    Those predicates store single-argument tuples; this flattens them to plain sets of names
+    for culprit, weapon, and room so scoring can reward matching hypotheses.
+    """
     likely_culprits = set(pos_index.get("LikelyCulprit", {}).keys())
     likely_weapons = set(pos_index.get("LikelyWeapon", {}).keys())
     likely_rooms = set(pos_index.get("LikelyRoom", {}).keys())
@@ -112,9 +156,13 @@ def _extract_likely_constants(
 
 
 def _add_support(support: list[str], items: Iterable[str]) -> None:
+    """Add human-readable evidence lines to the running list, without duplicates or blanks."""
     for it in items:
         if it and it not in support:
             support.append(it)
+
+
+# --- Hypothesis scoring ---
 
 
 def _score_hypothesis(
@@ -127,14 +175,22 @@ def _score_hypothesis(
     likely_rooms: set[str],
     has_contradiction: bool,
 ) -> tuple[float, list[str]]:
+    """Judge one full hypothesis: award points for KB and inferred evidence, subtract for conflicts.
+
+    In plain terms: matching ``At``, ``Weapon``, room clues, and Module 2 ``Likely*`` guesses
+    increases the score; explicit ``NOT`` facts or an alibi at the chosen time can return a
+    strongly negative score so bad candidates sink to the bottom.
+
+    Returns:
+        ``(score, supporting_fact_strings)`` — higher is better; large negatives mean "reject."
+    """
     culprit = hyp["culprit"]
     weapon = hyp["weapon"]
     room = hyp["room"]
     time = hyp["time"]
 
-    # If KB itself has a contradiction, penalize everything heavily.
     if has_contradiction:
-        return (-1000.0, ["CONTRADICTION in KB"])
+        return (_SCORE_KB_CONTRADICTION, ["CONTRADICTION in KB"])
 
     score = 0.0
     support: list[str] = []
@@ -171,40 +227,40 @@ def _score_hypothesis(
 
     # Hard contradictions from NOT_ facts.
     if neg_index.get("At", {}).get((culprit, room, time)):
-        return (-100.0, ["NOT At(con, room, time) in KB"])
+        return (_SCORE_HARD_NOT_AT, ["NOT At(con, room, time) in KB"])
     if neg_index.get("Culprit", {}).get((culprit, time)):
-        return (-100.0, ["NOT Culprit(person, time) in KB"])
+        return (_SCORE_HARD_NOT_CULPRIT_TIME, ["NOT Culprit(person, time) in KB"])
     # If Alibi is explicitly present, the person cannot be the culprit at that time.
     # (Even if NOT_Culprit hasn't been derived/recorded yet.)
     if pos_index.get("Alibi", {}).get((culprit, time)):
-        return (-75.0, ["Alibi(person, time) in KB"])
+        return (_SCORE_HARD_ALIBI_TIME, ["Alibi(person, time) in KB"])
 
     # Positive matches.
     at_key = (culprit, room, time)
     if pos_index.get("At", {}).get(at_key):
-        score += 30.0
+        score += _SCORE_MATCH_AT
         _add_support(support, [pos_index["At"][at_key]])
 
     weap_key = (weapon, room)
     if pos_index.get("Weapon", {}).get(weap_key):
-        score += 30.0
+        score += _SCORE_MATCH_WEAPON
         _add_support(support, [pos_index["Weapon"][weap_key]])
 
     # MurderLocation may be absent in some runs; VictimFound can still be informative.
     if pos_index.get("BodyDraggedFrom", {}).get((room,)):
-        score += 40.0
+        score += _SCORE_BODY_DRAGGED_FROM
         _add_support(support, [pos_index["BodyDraggedFrom"][(room,)]])
     elif pos_index.get("MurderLocation", {}).get((room,)):
-        score += 30.0
+        score += _SCORE_MURDER_LOCATION
         _add_support(support, [pos_index["MurderLocation"][(room,)]])
     elif pos_index.get("VictimFound", {}).get((room,)):
         # Body discovery room is partially fixed in Module 1, so treat it as weaker evidence.
-        score += 5.0
+        score += _SCORE_VICTIM_FOUND
         _add_support(support, [pos_index["VictimFound"][(room,)]])
 
     # Positive Culprit is usually absent (culprit hidden), but handle it if inferred.
     if pos_index.get("Culprit", {}).get((culprit, time)):
-        score += 30.0
+        score += _SCORE_MATCH_CULPRIT
         _add_support(support, [pos_index["Culprit"][(culprit, time)]])
 
     # Light use of inferred facts (proof-carrying) for additional score.
@@ -214,11 +270,14 @@ def _score_hypothesis(
         or ("At", (culprit, room, time)) in inferred_keys
     )
     if inferred_at:
-        score += 20.0
+        score += _SCORE_INFERRED_AT
         # No stable propositional for inferred facts, so keep support short.
         support.append("Inferred At(culprit, room, time)")
 
     return (score, support)
+
+
+# --- Genetic algorithm operators ---
 
 
 def _random_hypothesis(
@@ -228,6 +287,7 @@ def _random_hypothesis(
     rooms: list[str],
     times: list[str],
 ) -> dict[str, str]:
+    """Pick one random culprit, weapon, room, and time—each choice is independent and uniform."""
     return {
         "culprit": rng.choice(culprits),
         "weapon": rng.choice(weapons),
@@ -245,6 +305,7 @@ def _build_initial_population(
     rooms: list[str],
     times: list[str],
 ) -> list[dict[str, str]]:
+    """Seed the genetic algorithm with many random guesses before evolution begins."""
     return [
         _random_hypothesis(rng, culprits, weapons, rooms, times)
         for _ in range(max(population_size, 1))
@@ -256,6 +317,7 @@ def _tournament_select(
     scored_population: list[dict[str, Any]],
     tournament_size: int = 3,
 ) -> dict[str, str]:
+    """Parent selection: draw a few individuals at random and keep the one with the best score."""
     k = min(max(tournament_size, 1), len(scored_population))
     competitors = rng.sample(scored_population, k=k)
     competitors.sort(key=lambda p: float(p["score"]), reverse=True)
@@ -268,6 +330,9 @@ def _crossover(
     parent_b: dict[str, str],
     crossover_rate: float,
 ) -> dict[str, str]:
+    """Mix two parents: with probability ``crossover_rate``, each field (culprit, weapon, …)
+    comes from either parent at random; otherwise the child is a copy of the first parent.
+    """
     if rng.random() >= crossover_rate:
         return dict(parent_a)
     child: dict[str, str] = {}
@@ -285,6 +350,9 @@ def _mutate(
     rooms: list[str],
     times: list[str],
 ) -> dict[str, str]:
+    """Randomly perturb a hypothesis: each of culprit, weapon, room, and time may be replaced
+    with a fresh random choice, independently, with probability ``mutation_rate``.
+    """
     out = dict(hyp)
     if rng.random() < mutation_rate:
         out["culprit"] = rng.choice(culprits)
@@ -308,6 +376,10 @@ def _evaluate_population(
     likely_rooms: set[str],
     has_contradiction: bool,
 ) -> list[dict[str, Any]]:
+    """Compute fitness (score + supporting lines) for every hypothesis and sort best to worst.
+
+    Ties break in a fixed lexical order on culprit, weapon, room, time so runs are stable.
+    """
     scored: list[dict[str, Any]] = []
     for hyp in population:
         score, support = _score_hypothesis(
@@ -347,6 +419,11 @@ def _evaluate_exhaustive_candidates(
     likely_rooms: set[str],
     has_contradiction: bool,
 ) -> list[dict[str, Any]] | None:
+    """If there are not too many combinations, score every (culprit, weapon, room, time) exactly.
+
+    When the product of domain sizes exceeds a cap, return ``None`` so the caller keeps the
+    genetic algorithm's approximate ranking instead.
+    """
     total = len(culprits) * len(weapons) * len(rooms) * len(times)
     if total <= 0 or total > _EXACT_ENUM_MAX:
         return None
@@ -367,6 +444,9 @@ def _evaluate_exhaustive_candidates(
     )
 
 
+# --- Public entry point ---
+
+
 def run(
     kb_fol_path: str | Path,
     inferred_facts_path: str | Path,
@@ -381,7 +461,31 @@ def run(
     elitism_count: int = 4,
     random_seed: int | None = None,
 ) -> Dict[str, Any]:
-    """Run Module 4 and write `hypotheses_ranked.json` and `optimization_log.txt`."""
+    """Run the full hypothesis-ranking pipeline and save results next to other module outputs.
+
+    Loads structured facts from Module 3, builds searchable domains for each slot, evolves a
+    population with selection/crossover/mutation, then—if the full cross product is small—
+    replaces the GA output with an exact sort of every candidate. Writes both a JSON bundle
+    (configuration, stats, ranked list) and a short text log.
+
+    Args:
+        kb_fol_path: Path to `kb_fol.json` (Module 3).
+        inferred_facts_path: Path to `inferred_facts.json` (Module 3).
+        output_dir: Directory for `hypotheses_ranked.json` and `optimization_log.txt`.
+        hypothesis_schema_path: Reserved for future validation hooks.
+        scoring_rules_path: Reserved for externalized scoring rules.
+        top_k: Number of distinct top hypotheses to keep in output.
+        population_size: GA population size.
+        generations: Number of GA generations.
+        mutation_rate: Per-gene mutation probability.
+        crossover_rate: Probability of combining two parents vs cloning one.
+        elitism_count: Top individuals copied unchanged each generation.
+        random_seed: Seed for reproducible GA sampling (None = non-deterministic).
+
+    Returns:
+        Payload dict matching `hypotheses_ranked.json`: summary, ga_config,
+        search_stats, fitness_progress, hypotheses_ranked.
+    """
     _ = hypothesis_schema_path  # Reserved for future expansion (Modules 4/5).
     _ = scoring_rules_path  # Reserved for future expansion.
 
@@ -401,6 +505,8 @@ def run(
     has_contradiction = bool(pos_index.get("CONTRADICTION"))
 
     likely_culprits, likely_weapons, likely_rooms = _extract_likely_constants(pos_index)
+
+    # --- Build culprit / weapon / room / time domains (broad unions; Likely* as backstop) ---
 
     # Candidate sets derived from what's present. Prefer broad, observable domains
     # so we don't accidentally exclude the true answer when "Likely*" is narrow.
@@ -438,6 +544,8 @@ def run(
     rooms_l = sorted(rooms)
     times_l = sorted(times)
     rng = random.Random(random_seed)
+
+    # --- Genetic algorithm (may be superseded by exhaustive ranking below) ---
 
     population = _build_initial_population(
         rng=rng,
@@ -493,6 +601,8 @@ def run(
             next_population.append(child)
         population = next_population
 
+    # --- Exact enumeration when |C×W×R×T| is small (deterministic top ranking) ---
+
     # When the joint search space is reasonably small, evaluate all candidates
     # exactly so ranking quality does not depend on GA sampling luck.
     exhaustive_scored = _evaluate_exhaustive_candidates(
@@ -510,6 +620,8 @@ def run(
     )
     if exhaustive_scored is not None:
         final_scored = exhaustive_scored
+
+    # --- Dedup and take top_k for JSON payload ---
 
     hypotheses: list[dict[str, Any]] = [
         {
