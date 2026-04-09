@@ -52,70 +52,146 @@ def _build_verbal_timeline(
     inferred_facts_data: dict[str, Any] | None = None,
     rule_descriptions: dict[str, str] | None = None,
 ) -> list[str]:
-    """Create a short narrative timeline using propositional + FOL evidence."""
+    """Create timeline sentences tied to culprit/weapon/room/time."""
     culprit = solution.get("culprit") or "Unknown"
     weapon = solution.get("weapon") or "Unknown weapon"
     room = solution.get("room") or "Unknown room"
     time = solution.get("time") or "unknown time"
 
     timeline: list[str] = ["Case walkthrough summary:"]
-    narrative_bits: list[str] = [
-        f"The current theory places {culprit} in {room} at {time} with {weapon}."
-    ]
 
+    inferred_steps = (inferred_facts_data or {}).get("inferred_facts", [])
+
+    def _first_rule_for(predicate: str, args: tuple[str, ...]) -> str | None:
+        for step in inferred_steps:
+            fact = step.get("fact", {})
+            if fact.get("predicate") != predicate:
+                continue
+            fact_args = tuple(str(a) for a in fact.get("args", []))
+            if fact_args == args:
+                rid = str(step.get("rule_id", "?"))
+                rdesc = (rule_descriptions or {}).get(rid, "rule applied")
+                return f"{rid}: {rdesc}"
+        return None
+
+    rule_room = _first_rule_for("MurderLocation", (room,))
+    room_reason_parts: list[str] = []
     if evidence.get(f"MurderLocation_{room}") is True:
-        narrative_bits.append(f"Bloodstain evidence points to {room} as the murder location")
+        room_reason_parts.append(
+            f"bloodstain and scene clues converge on {room} as the likely attack location"
+        )
     if evidence.get(f"BodyDraggedFrom_{room}") is True:
-        narrative_bits.append(f"the body appears to have been dragged from {room}")
-    if time != "unknown time" and evidence.get(f"MurderTime_{time}") is True:
-        narrative_bits.append(f"time-focused rules support {time} as the likely murder time")
-    if time != "unknown time" and evidence.get(f"DragTraceFresh_{room}_{time}") is True:
-        narrative_bits.append(f"fresh drag-trace evidence in {room} aligns with {time}")
-    if len(narrative_bits) > 1:
-        timeline.append(". ".join(narrative_bits[1:]).capitalize() + ".")
-
-    inferred_count = 0
-    for fol in kb_fol_data.get("fol_propositions", []):
-        if fol.get("inferred") is True and fol.get("value") is True and not fol.get("negated"):
-            inferred_count += 1
+        room_reason_parts.append(
+            f"bloody drag marks indicate the body was moved from {room} to the discovery site"
+        )
+    if rule_room:
+        room_reason_parts.append(f"this is reinforced by inference rule {rule_room}")
+    room_reason = "; ".join(room_reason_parts) if room_reason_parts else "current strongest hypothesis support"
     timeline.append(
-        f"Module 3 contributed {inferred_count} inferred FOL facts used in this walkthrough."
+        f"The murder location is identified as {room}, because {room_reason}."
     )
 
-    if observations:
-        obs_pairs = [
-            f"{obs.get('action', '?')} -> {obs.get('result', '?')}" for obs in observations[:4]
-        ]
-        timeline.append(
-            "Module 2 query highlights include "
-            + "; ".join(obs_pairs)
-            + "."
+    rule_time = _first_rule_for("MurderTime", (time,))
+    time_reason_parts: list[str] = []
+    if time != "unknown time" and evidence.get(f"MurderTime_{time}") is True:
+        time_reason_parts.append(
+            f"time-linked clues narrow the event window to about {time}"
         )
+    if time != "unknown time" and evidence.get(f"DragTraceFresh_{room}_{time}") is True:
+        time_reason_parts.append(
+            f"fresh drag traces in {room} suggest the movement happened around {time}"
+        )
+    if rule_time:
+        time_reason_parts.append(f"the timing is strengthened by inference rule {rule_time}")
+    time_reason = "; ".join(time_reason_parts) if time_reason_parts else "the top-ranked time hypothesis"
+    timeline.append(
+        f"The estimated murder time is {time}, because {time_reason}."
+    )
 
-    if inferred_facts_data is not None:
-        inf = inferred_facts_data.get("inferred_facts", [])
-        if inf:
-            rule_summaries: list[str] = []
-            for step in inf[:4]:
-                fact = step.get("fact", {})
-                pred = fact.get("predicate", "?")
-                args = ", ".join(str(a) for a in fact.get("args", []))
-                rid = step.get("rule_id", "?")
-                rdesc = (rule_descriptions or {}).get(str(rid), "rule applied")
-                rule_summaries.append(f"{rid} ({rdesc}) inferred {pred}({args})")
-            timeline.append("Notable rule applications: " + "; ".join(rule_summaries) + ".")
+    rule_culprit = _first_rule_for("Culprit", (culprit, time))
+    culprit_reason_parts: list[str] = []
+    if time != "unknown time" and evidence.get(f"Culprit_{culprit}_{time}") is True:
+        culprit_reason_parts.append(
+            f"culprit-focused deductions point to {culprit} during the {time} window"
+        )
+    if time != "unknown time" and evidence.get(f"At_{culprit}_{room}_{time}") is True:
+        culprit_reason_parts.append(
+            f"backward tracing places {culprit} at {room} when the critical events occurred"
+        )
+    if rule_culprit:
+        culprit_reason_parts.append(f"this alignment is supported by inference rule {rule_culprit}")
+    culprit_reason = "; ".join(culprit_reason_parts) if culprit_reason_parts else "the top-ranked culprit hypothesis"
+    timeline.append(
+        f"The likely culprit is {culprit}, because {culprit_reason}."
+    )
 
-    warnings: list[str] = []
-    if time != "unknown time" and evidence.get(f"Alibi_{culprit}_{time}") is True:
-        warnings.append(f"{culprit} has an alibi at {time}")
-    if time != "unknown time" and evidence.get(f"NOT_Culprit_{culprit}_{time}") is True:
-        warnings.append(f"NOT_Culprit evidence exists for {culprit} at {time}")
-    if warnings:
-        timeline.append("Potential contradictions: " + "; ".join(warnings) + ".")
+    weapon_reason_parts: list[str] = []
+    if evidence.get(f"Weapon_{weapon}_{room}") is True:
+        weapon_reason_parts.append(
+            f"the {weapon} is tied to {room}, matching the reconstructed scene"
+        )
+    if rule_room:
+        weapon_reason_parts.append(
+            f"once the scene is traced back to {room}, {weapon} becomes the most consistent instrument"
+        )
+    weapon_reason = "; ".join(weapon_reason_parts) if weapon_reason_parts else "the top-ranked weapon hypothesis"
+    timeline.append(
+        f"The likely weapon is {weapon}, because {weapon_reason}."
+    )
 
-    if timeline and timeline[0] == "Case walkthrough summary:" and len(narrative_bits) >= 1:
-        timeline.insert(1, narrative_bits[0])
     return timeline
+
+
+def _build_case_story(
+    *,
+    solution: dict[str, Any],
+    evidence: dict[str, bool],
+) -> list[str]:
+    """Create a scenario narrative that varies by game state."""
+    culprit = str(solution.get("culprit") or "an unknown suspect")
+    weapon = str(solution.get("weapon") or "an unknown weapon")
+    room = str(solution.get("room") or "an unknown room")
+    time = str(solution.get("time") or "an unknown time")
+
+    seed_text = f"{culprit}|{weapon}|{room}|{time}"
+    variant = sum(ord(ch) for ch in seed_text) % 3
+
+    openers = [
+        f"Near {time}, tension centered around the {room}.",
+        f"As the clock approached {time}, the investigation narrowed to the {room}.",
+        f"By about {time}, the {room} became the focus of the case.",
+    ]
+    scene_lines = [
+        f"Bloodstain patterns suggest the attack began in {room}, not where the body was eventually found.",
+        f"The blood evidence points back to {room} as the most plausible origin of the violence.",
+        f"Tracing the scene backward places the initial assault in {room}.",
+    ]
+    drag_lines = [
+        f"Bloody drag marks imply the body was moved after the attack, which supports {room} as the source room.",
+        f"Drag evidence indicates post-incident movement from {room} toward the final discovery location.",
+        f"The drag trail reads like a relocation path, starting from {room}.",
+    ]
+    culprit_lines = [
+        f"Placing people by room and time puts {culprit} at the center of events around {time}.",
+        f"When witness and placement clues are aligned at {time}, {culprit} is the strongest fit.",
+        f"Backtracking presence at the key moment points to {culprit} as the likely actor.",
+    ]
+    weapon_lines = [
+        f"Because {weapon} is tied to {room}, it best matches the reconstructed sequence.",
+        f"With the scene anchored in {room}, {weapon} becomes the most coherent weapon choice.",
+        f"The link between {weapon} and {room} makes it the most consistent instrument in this scenario.",
+    ]
+
+    story = [
+        openers[variant],
+        scene_lines[variant],
+        culprit_lines[variant],
+        weapon_lines[variant],
+    ]
+    if evidence.get(f"BodyDraggedFrom_{room}") is True:
+        story.insert(2, drag_lines[variant])
+
+    return story
 
 
 def _build_grid_visual_payload(
@@ -232,6 +308,10 @@ def build_steps(
         "time": best_hyp.get("time"),
     }
     evidence4 = _augment_with_hypothesis(evidence3, solution4)
+    story_lines = _build_case_story(
+        solution=solution4,
+        evidence=evidence4,
+    )
     verbal_timeline = _build_verbal_timeline(
         solution=solution4,
         evidence=evidence4,
@@ -283,6 +363,9 @@ def build_steps(
             "evidence": evidence4,
             "extra_lines": [
                 "Module 5 combines module outputs into a concise visual walkthrough.",
+                "Case story:",
+                *story_lines,
+                "Reasoning timeline:",
                 *verbal_timeline,
             ],
         },
