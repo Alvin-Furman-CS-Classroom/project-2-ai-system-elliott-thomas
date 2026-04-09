@@ -7,9 +7,12 @@ produces a query plan, observations, and search trace for downstream modules.
 # Written with the help of Cursor Agent
 
 import json
+import logging
 import random
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
+
+logger = logging.getLogger(__name__)
 
 # Order of proposition prefixes: earlier in the list = higher priority to query.
 # Goal: Identify culprit, weapon, and room. Prioritize queries that directly help
@@ -597,8 +600,9 @@ def run_search(
             grounded = module_1.ground_all_rules(rules_data["rules"], rules_data["game_constraints"])
             module_1.infer(final_kb, grounded)
             hypothesis_summary = _summarize_hypotheses(final_kb, rules_data.get("game_constraints", {}))
-        except Exception:
+        except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError, AttributeError, RuntimeError) as e:
             # Keep module_2 robust: if closure or summarisation fails, we still return beam-search outputs.
+            logger.debug("Optional inference closure skipped: %s", e, exc_info=True)
             hypothesis_summary = None
 
     goal_reached = _is_goal_state(final_kb)
@@ -609,15 +613,14 @@ def run_search(
     if hypothesis_summary is not None:
         try:
             _write_hypothesis_summary(output_dir, hypothesis_summary, query_plan, observations)
-        except Exception:
-            pass
+        except (OSError, TypeError, ValueError) as e:
+            logger.debug("Could not write hypothesis summary: %s", e, exc_info=True)
 
     # Update evidence_found.json in place so downstream modules can consume enriched KB.
     try:
         _write_updated_evidence_file(evidence_path, data, final_kb, observations)
-    except Exception:
-        # Don't fail the search run if persistence fails.
-        pass
+    except OSError as e:
+        logger.debug("Could not update evidence file in place: %s", e, exc_info=True)
 
     if show_case_view and rules_path is not None:
         from src.case_viewer import (

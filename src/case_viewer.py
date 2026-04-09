@@ -6,83 +6,155 @@ Shows culprit/weapon/room and room state per time slot. Uses tkinter (stdlib).
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 # Keys in metadata for solution (module 1 random case)
 _SOLUTION_KEYS = ("_solution_culprit", "_solution_weapon", "_solution_room", "_solution_time")
 _CONTRADICTION_KEY = "CONTRADICTION"
 _CONTRADICTION_GROUNDED_RULES_KEY = "_CONTRADICTION_GROUNDED_RULES"
+MAP_CELL_PX = 140
+MAP_GRID_SIZE = 3
+MAP_CARD_PADDING = 4
+MAP_TEXT_FONT = ("Helvetica", 7)
+WINDOW_BG = "#f3f6fb"
+TIMELINE_HEIGHT = 48
+TIMELINE_MIN_WIDTH = 680
+TIMELINE_SIDE_MARGIN = 30
+TIMELINE_NODE_RADIUS_ACTIVE = 11
+TIMELINE_NODE_RADIUS_IDLE = 9
+FADE_ALPHA_TARGET = 0.9
+FADE_ALPHA_STEP = 0.05
+FADE_FRAME_MS = 14
+MAX_EXTRA_LINES = 8
+
+# Map / timeline / dual-label palette (single source for repeated UI literals)
+_MAP_GRID_LINE = "#dbe4f2"
+_MAP_CELL_BODY_BG = "#ffdede"
+_MAP_CELL_NORMAL_BG = "#eef3ff"
+_MAP_CELL_BODY_OUTLINE = "#b34040"
+_MAP_CELL_NORMAL_OUTLINE = "#52627a"
+_MAP_TEXT_MAIN = "#111"
+_LEGEND_FG = "#243447"
+_TIMELINE_EDGE_ACTIVE = "#4f7bd9"
+_TIMELINE_EDGE_IDLE = "#c8d3ea"
+_TIMELINE_NODE_ACTIVE = "#2f67d8"
+_TIMELINE_NODE_COMPLETE = "#6f95e6"
+_TIMELINE_NODE_IDLE = "#dfe7f6"
+_TIMELINE_NODE_OUTLINE_ACTIVE = "#204aa0"
+_TIMELINE_NODE_OUTLINE_IDLE = "#8ba2cf"
+_TIMELINE_TEXT_ACTIVE = "#ffffff"
+_TIMELINE_TEXT_LABEL = "#5b6f97"
+_TIMELINE_SUBLABEL = "#3f516e"
+_LABEL_ACTUAL_BG = "#ecfff0"
+_LABEL_ACTUAL_FG = "#12361c"
+_LABEL_M4_BG = "#eef3ff"
+_LABEL_M4_FG = "#1f3555"
+
+
+def _predicate_parts(
+    prop: str,
+    predicate: str,
+    min_segments: int,
+    *,
+    reject_not: bool = True,
+) -> list[str] | None:
+    """Split ``Predicate_...`` propositions into underscore segments if shape matches."""
+    if reject_not and prop.startswith("NOT_"):
+        return None
+    prefix = predicate + "_"
+    if not prop.startswith(prefix):
+        return None
+    parts = prop.split("_")
+    if len(parts) < min_segments:
+        return None
+    return parts
 
 
 def _parse_at(prop: str) -> tuple[str, str, str] | None:
     """At_Person_Room_Time -> (person, room, time)."""
-    if not prop.startswith("At_") or prop.startswith("NOT_"):
-        return None
-    parts = prop.split("_")
-    if len(parts) < 4:
+    parts = _predicate_parts(prop, "At", 4, reject_not=True)
+    if parts is None:
         return None
     return (parts[1], parts[2], parts[3])
 
 
 def _parse_weapon(prop: str) -> tuple[str, str] | None:
     """Weapon_WeaponName_Room -> (weapon, room)."""
-    if not prop.startswith("Weapon_") or prop.startswith("NOT_"):
-        return None
-    parts = prop.split("_")
-    if len(parts) < 3:
+    parts = _predicate_parts(prop, "Weapon", 3, reject_not=True)
+    if parts is None:
         return None
     return (parts[1], parts[2])
 
 
 def _parse_door_locked(prop: str) -> tuple[str, str] | None:
     """DoorLocked_Room_Time -> (room, time)."""
-    if not prop.startswith("DoorLocked_"):
-        return None
-    parts = prop.split("_")
-    if len(parts) < 3:
+    parts = _predicate_parts(prop, "DoorLocked", 3, reject_not=False)
+    if parts is None:
         return None
     return (parts[1], parts[2])
 
 
 def _parse_murder_location(prop: str) -> str | None:
     """MurderLocation_Room -> room."""
-    if not prop.startswith("MurderLocation_"):
-        return None
-    parts = prop.split("_")
-    if len(parts) < 2:
+    parts = _predicate_parts(prop, "MurderLocation", 2, reject_not=False)
+    if parts is None:
         return None
     return parts[1]
 
 
 def _parse_victim_found(prop: str) -> str | None:
     """VictimFound_Room -> room (where body was found)."""
-    if not prop.startswith("VictimFound_") or prop.startswith("NOT_"):
-        return None
-    parts = prop.split("_")
-    if len(parts) < 2:
+    parts = _predicate_parts(prop, "VictimFound", 2, reject_not=True)
+    if parts is None:
         return None
     return parts[1]
 
 
 def _parse_body_dragged_from(prop: str) -> str | None:
     """BodyDraggedFrom_Room -> room (where the body was dragged from)."""
-    if not prop.startswith("BodyDraggedFrom_") or prop.startswith("NOT_"):
-        return None
-    parts = prop.split("_")
-    if len(parts) < 2:
+    parts = _predicate_parts(prop, "BodyDraggedFrom", 2, reject_not=True)
+    if parts is None:
         return None
     return parts[1]
 
 
 def _parse_culprit_positive(prop: str) -> tuple[str, str] | None:
     """Culprit_Person_Time (positive only) -> (person, time)."""
-    if not prop.startswith("Culprit_") or prop.startswith("NOT_Culprit_"):
-        return None
-    parts = prop.split("_")
-    if len(parts) < 3:
+    parts = _predicate_parts(prop, "Culprit", 3, reject_not=False)
+    if parts is None:
         return None
     return (parts[1], parts[2])
+
+
+def _format_room_state_cell(
+    state_at_time: dict[str, Any],
+    *,
+    body_label: str,
+    dragged_label: str,
+    locked_label: str,
+) -> tuple[str, bool, bool]:
+    """Build table/map cell text and body/drag row flags."""
+    people = state_at_time.get("people", [])
+    weapons = state_at_time.get("weapons", [])
+    locked = state_at_time.get("door_locked")
+    body_found = bool(state_at_time.get("body_found"))
+    dragged_from = bool(state_at_time.get("dragged_from"))
+    parts: list[str] = []
+    if body_found:
+        parts.append(body_label)
+    if dragged_from:
+        parts.append(dragged_label)
+    if people:
+        parts.append(", ".join(people))
+    if weapons:
+        parts.append("W: " + ", ".join(weapons))
+    if locked is True:
+        parts.append(locked_label)
+    return (", ".join(parts) if parts else "—", body_found, dragged_from)
 
 
 def parse_evidence_to_room_state(
@@ -236,27 +308,27 @@ def _show_room_9x9_map_popup(
 
     popup = tk.Toplevel(parent_root)
     popup.title(title)
-    popup.configure(background="#f3f6fb")
+    popup.configure(background=WINDOW_BG)
 
-    cell = 130
-    grid = 3
+    cell = MAP_CELL_PX
+    grid = MAP_GRID_SIZE
     canvas_w = grid * cell
     canvas_h = grid * cell
     canvas = tk.Canvas(
         popup,
         width=canvas_w,
         height=canvas_h,
-        background="#f3f6fb",
+        background=WINDOW_BG,
         highlightthickness=0,
         bd=0,
     )
-    canvas.pack(fill=tk.BOTH, expand=True, padx=10, pady=(10, 4))
+    canvas.pack(fill=tk.BOTH, expand=True, padx=10, pady=(10, MAP_CARD_PADDING))
 
     # Draw background grid.
     for i in range(grid + 1):
         x = i * cell
-        canvas.create_line(x, 0, x, canvas_h, fill="#dbe4f2")
-        canvas.create_line(0, i * cell, canvas_w, i * cell, fill="#dbe4f2")
+        canvas.create_line(x, 0, x, canvas_h, fill=_MAP_GRID_LINE)
+        canvas.create_line(0, i * cell, canvas_w, i * cell, fill=_MAP_GRID_LINE)
 
     # Draw each room in its mapped cell.
     for room_idx, room_name in enumerate(rooms[:9]):
@@ -274,13 +346,13 @@ def _show_room_9x9_map_popup(
         body_found = s.get("body_found")
         dragged_from = s.get("dragged_from")
 
-        fill = "#ffdede" if body_found else "#eef3ff"
-        outline = "#b34040" if body_found else "#52627a"
+        fill = _MAP_CELL_BODY_BG if body_found else _MAP_CELL_NORMAL_BG
+        outline = _MAP_CELL_BODY_OUTLINE if body_found else _MAP_CELL_NORMAL_OUTLINE
         canvas.create_rectangle(
-            x0 + 4,
-            y0 + 4,
-            x0 + cell - 4,
-            y0 + cell - 4,
+            x0 + MAP_CARD_PADDING,
+            y0 + MAP_CARD_PADDING,
+            x0 + cell - MAP_CARD_PADDING,
+            y0 + cell - MAP_CARD_PADDING,
             fill=fill,
             outline=outline,
             width=2,
@@ -288,30 +360,30 @@ def _show_room_9x9_map_popup(
 
         lines: list[str] = [room_name]
         if body_found:
-            lines.append("[B] Body")
+            lines.append("● Body")
         if dragged_from:
-            lines.append("[D] DraggedFrom")
+            lines.append("↳ DraggedFrom")
         if people:
             lines.append("P: " + ", ".join(people[:3]))
         if weapons:
             lines.append("W: " + ", ".join(weapons[:2]))
         if locked is True:
-            lines.append("[L] Locked")
+            lines.append("🔒 Locked")
 
         canvas.create_text(
             x0 + cell / 2,
             y0 + cell / 2,
             text="\n".join(lines),
-            font=("Helvetica", 7),
-            fill="#111",
+            font=MAP_TEXT_FONT,
+            fill=_MAP_TEXT_MAIN,
             justify="center",
         )
 
     legend = tk.Label(
         popup,
-        text="[B]=Body  [D]=DraggedFrom  [L]=DoorLocked  P=People  W=Weapons",
-        bg="#f3f6fb",
-        fg="#243447",
+        text="● Body   ↳ DraggedFrom   🔒 DoorLocked   P People   W Weapons",
+        bg=WINDOW_BG,
+        fg=_LEGEND_FG,
         anchor="w",
         padx=12,
     )
@@ -392,23 +464,13 @@ def show_case_view(
         row = [room_name]
         for t in time_points:
             s = state.get(room_name, {}).get(t, {})
-            people = s.get("people", [])
-            weapons = s.get("weapons", [])
-            locked = s.get("door_locked")
-            body_found = s.get("body_found")
-            dragged_from = s.get("dragged_from")
-            parts = []
-            if body_found:
-                parts.append("Body")
-            if dragged_from:
-                parts.append("DraggedFrom")
-            if people:
-                parts.append(", ".join(people))
-            if weapons:
-                parts.append("W: " + ", ".join(weapons))
-            if locked is True:
-                parts.append("Locked")
-            row.append(", ".join(parts) if parts else "—")
+            cell_text, _, _ = _format_room_state_cell(
+                s,
+                body_label="Body",
+                dragged_label="DraggedFrom",
+                locked_label="Locked",
+            )
+            row.append(cell_text)
         tree.insert("", tk.END, values=row)
 
     ttk.Button(
@@ -450,7 +512,7 @@ def show_case_view_multi(
         return
 
     root = tk.Tk()
-    root.configure(background="#f3f6fb")
+    root.configure(background=WINDOW_BG)
     module_ids = [str(s.get("module_id", "?")) for s in steps]
     root.title("Detective AI — Case viewer (Module " + " → ".join(module_ids) + ")")
     root.geometry("780x560")
@@ -458,7 +520,7 @@ def show_case_view_multi(
     style = ttk.Style(root)
     try:
         style.theme_use("clam")
-    except Exception:
+    except tk.TclError:
         pass
     style.configure("Treeview", rowheight=24)
     style.configure("Treeview.Heading", font=("", 10, "bold"))
@@ -476,34 +538,25 @@ def show_case_view_multi(
 
     actual_box = ttk.LabelFrame(sol_frame, text="Actual Solution", padding=5)
     module4_box = ttk.LabelFrame(sol_frame, text="Module 4 Hypothesis", padding=5)
-    module5_box = ttk.LabelFrame(sol_frame, text="Module 5 Output", padding=5)
     actual_box.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
     module4_box.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-    module5_box.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
     actual_label = tk.Label(
-        actual_box, text="", justify=tk.LEFT, bg="#ecfff0", fg="#12361c", padx=6, pady=4
+        actual_box, text="", justify=tk.LEFT, bg=_LABEL_ACTUAL_BG, fg=_LABEL_ACTUAL_FG, padx=6, pady=4
     )
     module4_label = tk.Label(
-        module4_box, text="", justify=tk.LEFT, bg="#eef3ff", fg="#1f3555", padx=6, pady=4
-    )
-    module5_label = tk.Label(
-        module5_box, text="", justify=tk.LEFT, bg="#fff7e8", fg="#5a3d0c", padx=6, pady=4
+        module4_box, text="", justify=tk.LEFT, bg=_LABEL_M4_BG, fg=_LABEL_M4_FG, padx=6, pady=4
     )
     actual_label.pack(anchor=tk.W, fill=tk.X)
     module4_label.pack(anchor=tk.W, fill=tk.X)
-    module5_label.pack(anchor=tk.W, fill=tk.X)
 
     actual_solution: dict[str, str | None] = {}
     module4_solution: dict[str, str | None] = {}
-    module5_solution: dict[str, str | None] = {}
     for s in steps:
         if not actual_solution and s.get("module_id") in (0, 1):
             actual_solution = s.get("solution") or {}
         if not module4_solution and s.get("module_id") == 4:
             module4_solution = s.get("solution") or {}
-        if not module5_solution and s.get("module_id") == 5:
-            module5_solution = s.get("solution") or {}
 
     def _render_solution(sol: dict[str, str | None]) -> str:
         culp = sol.get("culprit") or "?"
@@ -514,7 +567,6 @@ def show_case_view_multi(
 
     actual_label.config(text=_render_solution(actual_solution))
     module4_label.config(text="Hidden until Module 4")
-    module5_label.config(text="Hidden until Module 5")
 
     btn_frame = ttk.Frame(main)
     btn_frame.pack(fill=tk.X, pady=(6, 2))
@@ -548,10 +600,19 @@ def show_case_view_multi(
         ),
     ).pack(side=tk.LEFT, padx=(10, 0))
 
+    timeline_canvas = tk.Canvas(
+        main,
+        height=TIMELINE_HEIGHT,
+        background=WINDOW_BG,
+        highlightthickness=0,
+        bd=0,
+    )
+    timeline_canvas.pack(fill=tk.X, pady=(2, 4))
+
     extra_frame = ttk.Frame(main)
     extra_frame.pack(fill=tk.X)
     extra_labels: list[ttk.Label] = []
-    max_extra_lines = 8
+    max_extra_lines = MAX_EXTRA_LINES
 
     grid_frame = ttk.LabelFrame(
         main,
@@ -572,7 +633,86 @@ def show_case_view_multi(
     tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
     vsb.pack(side=tk.RIGHT, fill=tk.Y)
 
-    def refresh() -> None:
+    def _fade_to(target_alpha: float, *, on_done: Any = None) -> None:
+        try:
+            current = float(root.attributes("-alpha"))
+        except tk.TclError:
+            if on_done:
+                on_done()
+            return
+        step = FADE_ALPHA_STEP if target_alpha > current else -FADE_ALPHA_STEP
+
+        def _tick() -> None:
+            nonlocal current
+            current += step
+            if (step > 0 and current >= target_alpha) or (step < 0 and current <= target_alpha):
+                try:
+                    root.attributes("-alpha", target_alpha)
+                except tk.TclError:
+                    pass
+                if on_done:
+                    on_done()
+                return
+            try:
+                root.attributes("-alpha", current)
+            except tk.TclError:
+                if on_done:
+                    on_done()
+                return
+            root.after(FADE_FRAME_MS, _tick)
+
+        _tick()
+
+    def _draw_timeline_bar(active_idx: int) -> None:
+        timeline_canvas.delete("all")
+        total = len(steps)
+        if total <= 0:
+            return
+        w = max(timeline_canvas.winfo_width(), TIMELINE_MIN_WIDTH)
+        h = max(timeline_canvas.winfo_height(), TIMELINE_HEIGHT)
+        x_left = TIMELINE_SIDE_MARGIN
+        x_right = w - TIMELINE_SIDE_MARGIN
+        y = h // 2
+        span = max(1, x_right - x_left)
+        step_w = span / max(1, total - 1)
+        for i in range(total - 1):
+            x0 = x_left + i * step_w
+            x1 = x_left + (i + 1) * step_w
+            line_color = _TIMELINE_EDGE_ACTIVE if i < active_idx else _TIMELINE_EDGE_IDLE
+            timeline_canvas.create_line(x0, y, x1, y, fill=line_color, width=3)
+
+        for i, step in enumerate(steps):
+            x = x_left + i * step_w
+            module_id = str(step.get("module_id", i + 1))
+            active = i == active_idx
+            complete = i < active_idx
+            fill = _TIMELINE_NODE_ACTIVE if active else (_TIMELINE_NODE_COMPLETE if complete else _TIMELINE_NODE_IDLE)
+            outline = _TIMELINE_NODE_OUTLINE_ACTIVE if active else _TIMELINE_NODE_OUTLINE_IDLE
+            radius = TIMELINE_NODE_RADIUS_ACTIVE if active else TIMELINE_NODE_RADIUS_IDLE
+            timeline_canvas.create_oval(
+                x - radius, y - radius, x + radius, y + radius, fill=fill, outline=outline, width=2
+            )
+            timeline_canvas.create_text(
+                x,
+                y,
+                text=module_id,
+                fill=_TIMELINE_TEXT_ACTIVE if active or complete else _TIMELINE_TEXT_LABEL,
+                font=("", 9, "bold"),
+            )
+            timeline_canvas.create_text(
+                x, y + 18, text=f"M{module_id}", fill=_TIMELINE_SUBLABEL, font=("", 8)
+            )
+            timeline_canvas.create_rectangle(
+                x - radius, y - radius, x + radius, y + radius,
+                outline="", fill="", tags=(f"hit_{i}",)
+            )
+            timeline_canvas.tag_bind(
+                f"hit_{i}",
+                "<Button-1>",
+                lambda _e, idx=i: _jump_to(idx),
+            )
+
+    def _apply_step_content() -> None:
         i = idx_var[0]
         step = steps[i]
         evidence = step["evidence"]
@@ -583,10 +723,6 @@ def show_case_view_multi(
             module4_label.config(text=_render_solution(module4_solution))
         else:
             module4_label.config(text="Hidden until Module 4")
-        if step.get("module_id", 0) >= 5 and module5_solution:
-            module5_label.config(text=_render_solution(module5_solution))
-        else:
-            module5_label.config(text="Hidden until Module 5")
         # Actual + Module 4 hypothesis boxes stay fixed while cycling modules.
         # The evidence grid still uses the current step's solution time.
         for lb in extra_labels:
@@ -614,28 +750,36 @@ def show_case_view_multi(
             row_has_drag = False
             for t in time_points:
                 s = state.get(room_name, {}).get(t, {})
-                people = s.get("people", [])
-                weapons = s.get("weapons", [])
-                locked = s.get("door_locked")
-                body_found = s.get("body_found")
-                dragged_from = s.get("dragged_from")
-                parts = []
+                cell_text, body_found, dragged_from = _format_room_state_cell(
+                    s,
+                    body_label="● Body",
+                    dragged_label="↳ Dragged",
+                    locked_label="🔒 Locked",
+                )
                 if body_found:
-                    parts.append("[B] Body")
                     row_has_body = True
                 if dragged_from:
-                    parts.append("[D] Dragged")
                     row_has_drag = True
-                if people:
-                    parts.append(", ".join(people))
-                if weapons:
-                    parts.append("W: " + ", ".join(weapons))
-                if locked is True:
-                    parts.append("[L] Locked")
-                row.append(", ".join(parts) if parts else "—")
+                row.append(cell_text)
             tag = "body_row" if row_has_body else ("drag_row" if row_has_drag else "normal_row")
             tree.insert("", tk.END, values=row, tags=(tag,))
         step_label.config(text=f"Step {idx_var[0] + 1}/{len(steps)}")
+        _draw_timeline_bar(idx_var[0])
+
+    def refresh(*, animate: bool = True) -> None:
+        if not animate:
+            _apply_step_content()
+            return
+
+        def _after_fade_out() -> None:
+            _apply_step_content()
+            _fade_to(1.0)
+
+        _fade_to(FADE_ALPHA_TARGET, on_done=_after_fade_out)
+
+    def _jump_to(target_idx: int) -> None:
+        idx_var[0] = target_idx % len(steps)
+        refresh()
 
     def on_prev() -> None:
         idx_var[0] = (idx_var[0] - 1) % len(steps)
@@ -649,7 +793,8 @@ def show_case_view_multi(
         idx_var[0] = 0
         refresh()
 
-    refresh()
+    timeline_canvas.bind("<Configure>", lambda _e: _draw_timeline_bar(idx_var[0]))
+    refresh(animate=False)
 
     def on_closing() -> None:
         root.destroy()
@@ -682,7 +827,7 @@ def _summarize_new_facts(prev: dict[str, bool], curr: dict[str, bool], max_items
     curr_set = {k for k, v in curr.items() if v is True}
     added = sorted(curr_set - prev_set)
     if not added:
-        return ["New facts learned: 0"]
+        return []
     sample = added[:max_items]
     more = len(added) - len(sample)
     lines = [f"New facts learned: {len(added)}"]
@@ -811,8 +956,8 @@ if __name__ == "__main__":
                         "time": best_hyp.get("time"),
                     }
                     best_score = best_hyp.get("score")
-            except Exception:
-                pass
+            except (OSError, json.JSONDecodeError, UnicodeDecodeError, KeyError, TypeError, AttributeError) as e:
+                logger.debug("Could not read Module 4 ranked hypotheses: %s", e, exc_info=True)
 
         # For visualization, inject the best-hypothesis placement into evidence
         # so the room map can show where Module 4 believes the culprit was.

@@ -10,7 +10,10 @@ base file and an inferred-facts file with proof steps for downstream modules.
 # Written with the help of Cursor Agent
 
 import json
+import logging
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 _NOT_PREFIX = "NOT_"
 _CONTRADICTION = "CONTRADICTION"
@@ -428,9 +431,8 @@ def run(
                 evidence_for_fol[f"LikelyWeapon_{weapon}"] = True
             if room:
                 evidence_for_fol[f"LikelyRoom_{room}"] = True
-        except Exception:
-            # Keep Module 3 robust if hypothesis file is malformed or unreadable.
-            pass
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError, AttributeError, TypeError, KeyError) as e:
+            logger.debug("Skipping hypothesis_summary merge (not usable): %s", e, exc_info=True)
 
     fol_propositions = create_fol_propositions(evidence_for_fol)
     fol_extended, inferred_facts = infer_fol(fol_propositions, data["rules"])

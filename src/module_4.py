@@ -165,6 +165,120 @@ def _add_support(support: list[str], items: Iterable[str]) -> None:
 # --- Hypothesis scoring ---
 
 
+def _score_likely_priors(
+    culprit: str,
+    weapon: str,
+    room: str,
+    pos_index: dict,
+    likely_culprits: set[str],
+    likely_weapons: set[str],
+    likely_rooms: set[str],
+    support: list[str],
+) -> float:
+    """Apply Module 2 ``Likely*`` soft bonuses."""
+    score = 0.0
+    if culprit in likely_culprits:
+        score += _LIKELY_PRIOR_WEIGHT
+        _add_support(support, [pos_index.get("LikelyCulprit", {}).get((culprit,))])
+    if weapon in likely_weapons:
+        score += _LIKELY_PRIOR_WEIGHT
+        _add_support(support, [pos_index.get("LikelyWeapon", {}).get((weapon,))])
+    if room in likely_rooms:
+        score += _LIKELY_PRIOR_WEIGHT
+        _add_support(support, [pos_index.get("LikelyRoom", {}).get((room,))])
+    return score
+
+
+def _apply_global_soft_penalties(
+    culprit: str,
+    pos_index: dict,
+    neg_index: dict,
+    support: list[str],
+) -> float:
+    """Light global penalties to break ties among culprits with similar local support."""
+    score = 0.0
+    neg_culprit_count = sum(
+        1
+        for args in neg_index.get("Culprit", {})
+        if len(args) >= 1 and args[0] == culprit
+    )
+    if neg_culprit_count:
+        score -= _GLOBAL_NOT_CULPRIT_PENALTY * float(neg_culprit_count)
+        support.append(f"Global NOT_Culprit penalty x{neg_culprit_count}")
+    alibi_count = sum(
+        1
+        for args in pos_index.get("Alibi", {})
+        if len(args) >= 1 and args[0] == culprit
+    )
+    if alibi_count:
+        score -= _GLOBAL_ALIBI_PENALTY * float(alibi_count)
+        support.append(f"Global Alibi penalty x{alibi_count}")
+    return score
+
+
+def _hard_veto_for_hypothesis(
+    culprit: str,
+    room: str,
+    time: str,
+    pos_index: dict,
+    neg_index: dict,
+) -> tuple[float, list[str]] | None:
+    """Return a final (score, support) if the hypothesis is ruled out; else None."""
+    if neg_index.get("At", {}).get((culprit, room, time)):
+        return (_SCORE_HARD_NOT_AT, ["NOT At(con, room, time) in KB"])
+    if neg_index.get("Culprit", {}).get((culprit, time)):
+        return (_SCORE_HARD_NOT_CULPRIT_TIME, ["NOT Culprit(person, time) in KB"])
+    if pos_index.get("Alibi", {}).get((culprit, time)):
+        return (_SCORE_HARD_ALIBI_TIME, ["Alibi(person, time) in KB"])
+    return None
+
+
+def _score_positive_evidence(
+    culprit: str,
+    weapon: str,
+    room: str,
+    time: str,
+    pos_index: dict,
+    inferred_keys: set[tuple[str, tuple[str, ...]]],
+    support: list[str],
+) -> float:
+    """Points for ``At`` / ``Weapon`` / room clues / inferred ``At``."""
+    score = 0.0
+    at_key = (culprit, room, time)
+    if pos_index.get("At", {}).get(at_key):
+        score += _SCORE_MATCH_AT
+        _add_support(support, [pos_index["At"][at_key]])
+
+    weap_key = (weapon, room)
+    if pos_index.get("Weapon", {}).get(weap_key):
+        score += _SCORE_MATCH_WEAPON
+        _add_support(support, [pos_index["Weapon"][weap_key]])
+
+    if pos_index.get("BodyDraggedFrom", {}).get((room,)):
+        score += _SCORE_BODY_DRAGGED_FROM
+        _add_support(support, [pos_index["BodyDraggedFrom"][(room,)]])
+    elif pos_index.get("MurderLocation", {}).get((room,)):
+        score += _SCORE_MURDER_LOCATION
+        _add_support(support, [pos_index["MurderLocation"][(room,)]])
+    elif pos_index.get("VictimFound", {}).get((room,)):
+        score += _SCORE_VICTIM_FOUND
+        _add_support(support, [pos_index["VictimFound"][(room,)]])
+
+    if pos_index.get("Culprit", {}).get((culprit, time)):
+        score += _SCORE_MATCH_CULPRIT
+        _add_support(support, [pos_index["Culprit"][(culprit, time)]])
+
+    inferred_at = (
+        ("At", (culprit, room, "TIME")) in inferred_keys
+        or ("At", (culprit, room, time)) in inferred_keys
+    )
+    if inferred_at:
+        score += _SCORE_INFERRED_AT
+        support.append("Inferred At(culprit, room, time)")
+
+    return score
+
+
 def _score_hypothesis(
     hyp: dict[str, str],
     pos_index: dict,
@@ -192,88 +306,20 @@ def _score_hypothesis(
     if has_contradiction:
         return (_SCORE_KB_CONTRADICTION, ["CONTRADICTION in KB"])
 
-    score = 0.0
     support: list[str] = []
-
-    # Soft preferences from Module 2 hypothesis summary.
-    if culprit in likely_culprits:
-        score += _LIKELY_PRIOR_WEIGHT
-        _add_support(support, [pos_index.get("LikelyCulprit", {}).get((culprit,))])
-    if weapon in likely_weapons:
-        score += _LIKELY_PRIOR_WEIGHT
-        _add_support(support, [pos_index.get("LikelyWeapon", {}).get((weapon,))])
-    if room in likely_rooms:
-        score += _LIKELY_PRIOR_WEIGHT
-        _add_support(support, [pos_index.get("LikelyRoom", {}).get((room,))])
-
-    # Light global penalties to break ties among culprits that otherwise have
-    # similar local support in (room, weapon, time).
-    neg_culprit_count = sum(
-        1
-        for args in neg_index.get("Culprit", {})
-        if len(args) >= 1 and args[0] == culprit
+    score = 0.0
+    score += _score_likely_priors(
+        culprit, weapon, room, pos_index, likely_culprits, likely_weapons, likely_rooms, support
     )
-    if neg_culprit_count:
-        score -= _GLOBAL_NOT_CULPRIT_PENALTY * float(neg_culprit_count)
-        support.append(f"Global NOT_Culprit penalty x{neg_culprit_count}")
-    alibi_count = sum(
-        1
-        for args in pos_index.get("Alibi", {})
-        if len(args) >= 1 and args[0] == culprit
+    score += _apply_global_soft_penalties(culprit, pos_index, neg_index, support)
+
+    veto = _hard_veto_for_hypothesis(culprit, room, time, pos_index, neg_index)
+    if veto is not None:
+        return veto
+
+    score += _score_positive_evidence(
+        culprit, weapon, room, time, pos_index, inferred_keys, support
     )
-    if alibi_count:
-        score -= _GLOBAL_ALIBI_PENALTY * float(alibi_count)
-        support.append(f"Global Alibi penalty x{alibi_count}")
-
-    # Hard contradictions from NOT_ facts.
-    if neg_index.get("At", {}).get((culprit, room, time)):
-        return (_SCORE_HARD_NOT_AT, ["NOT At(con, room, time) in KB"])
-    if neg_index.get("Culprit", {}).get((culprit, time)):
-        return (_SCORE_HARD_NOT_CULPRIT_TIME, ["NOT Culprit(person, time) in KB"])
-    # If Alibi is explicitly present, the person cannot be the culprit at that time.
-    # (Even if NOT_Culprit hasn't been derived/recorded yet.)
-    if pos_index.get("Alibi", {}).get((culprit, time)):
-        return (_SCORE_HARD_ALIBI_TIME, ["Alibi(person, time) in KB"])
-
-    # Positive matches.
-    at_key = (culprit, room, time)
-    if pos_index.get("At", {}).get(at_key):
-        score += _SCORE_MATCH_AT
-        _add_support(support, [pos_index["At"][at_key]])
-
-    weap_key = (weapon, room)
-    if pos_index.get("Weapon", {}).get(weap_key):
-        score += _SCORE_MATCH_WEAPON
-        _add_support(support, [pos_index["Weapon"][weap_key]])
-
-    # MurderLocation may be absent in some runs; VictimFound can still be informative.
-    if pos_index.get("BodyDraggedFrom", {}).get((room,)):
-        score += _SCORE_BODY_DRAGGED_FROM
-        _add_support(support, [pos_index["BodyDraggedFrom"][(room,)]])
-    elif pos_index.get("MurderLocation", {}).get((room,)):
-        score += _SCORE_MURDER_LOCATION
-        _add_support(support, [pos_index["MurderLocation"][(room,)]])
-    elif pos_index.get("VictimFound", {}).get((room,)):
-        # Body discovery room is partially fixed in Module 1, so treat it as weaker evidence.
-        score += _SCORE_VICTIM_FOUND
-        _add_support(support, [pos_index["VictimFound"][(room,)]])
-
-    # Positive Culprit is usually absent (culprit hidden), but handle it if inferred.
-    if pos_index.get("Culprit", {}).get((culprit, time)):
-        score += _SCORE_MATCH_CULPRIT
-        _add_support(support, [pos_index["Culprit"][(culprit, time)]])
-
-    # Light use of inferred facts (proof-carrying) for additional score.
-    # Module 3 inference sometimes uses TIME as a wildcard string.
-    inferred_at = (
-        ("At", (culprit, room, "TIME")) in inferred_keys
-        or ("At", (culprit, room, time)) in inferred_keys
-    )
-    if inferred_at:
-        score += _SCORE_INFERRED_AT
-        # No stable propositional for inferred facts, so keep support short.
-        support.append("Inferred At(culprit, room, time)")
-
     return (score, support)
 
 

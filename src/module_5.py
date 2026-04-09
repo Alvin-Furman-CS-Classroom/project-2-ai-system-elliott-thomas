@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Any
 
 from src.case_viewer import (
-    _summarize_new_facts,
     parse_evidence_to_room_state,
     get_solution_from_evidence,
     get_solution_from_metadata,
@@ -19,10 +18,120 @@ from src.case_viewer import (
     show_case_view_multi,
 )
 
+MODULE2_OBS_SAMPLE_LIMIT = 12
+GRID_DIMENSION = 3
+ASCII_ROW_PERSON_LIMIT = 2
+ASCII_ROW_WEAPON_LIMIT = 2
+
 
 def _load_json(path: str | Path) -> dict[str, Any]:
-    with open(Path(path), encoding="utf-8") as f:
-        return json.load(f)
+    target = Path(path)
+    try:
+        with open(target, encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(f"Required JSON input not found: {target}") from exc
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid JSON in file: {target}") from exc
+
+
+def _coerce_obs_result(value: Any) -> bool | None:
+    """Normalize observation result values to bool when possible."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        txt = value.strip().lower()
+        if txt in {"true", "t", "1", "yes", "y"}:
+            return True
+        if txt in {"false", "f", "0", "no", "n"}:
+            return False
+    return None
+
+
+def _true_prop_keys(evidence: dict[str, bool]) -> set[str]:
+    return {k for k, v in evidence.items() if v is True}
+
+
+def _module2_evidence_delta(
+    evidence_pre_m2: dict[str, bool], evidence_post_m2: dict[str, bool]
+) -> tuple[set[str], set[str], int]:
+    """Facts true before Module 2, facts newly true after Module 2, and count added."""
+    pre = _true_prop_keys(evidence_pre_m2)
+    post = _true_prop_keys(evidence_post_m2)
+    added = post - pre
+    return pre, added, len(added)
+
+
+def _module2_learned_fact_keys(observations: list[dict[str, Any]] | None) -> set[str]:
+    """Facts learned from Module 2 observation outcomes."""
+    learned: set[str] = set()
+    for obs in observations or []:
+        action = str(obs.get("action", "")).strip()
+        if not action:
+            continue
+        value = _coerce_obs_result(obs.get("result"))
+        if value is True:
+            learned.add(action)
+        elif value is False and (action.startswith("KeyFound_") or action.startswith("At_")):
+            learned.add(f"NOT_{action}")
+    return learned
+
+
+def _summarize_module2_observations(observations: list[dict[str, Any]] | None) -> list[str]:
+    learned = sorted(_module2_learned_fact_keys(observations))
+    if not learned:
+        return []
+    sample = learned[:MODULE2_OBS_SAMPLE_LIMIT]
+    more = len(learned) - len(sample)
+    return [
+        f"New facts learned from Module 2 observations: {len(learned)}",
+        "Learned facts (sample): " + ", ".join(sample) + (f" ... (+{more} more)" if more > 0 else ""),
+    ]
+
+
+def _origin_blurb(
+    prop_key: str,
+    *,
+    pre_m2: set[str],
+    m2_added: set[str],
+    m3_only: set[str],
+) -> str:
+    """Short attribution for where a proposition entered the working KB."""
+    if prop_key in pre_m2:
+        return "already established in the initial case (Module 1)"
+    if prop_key in m2_added:
+        return "learned during Module 2 witness queries"
+    if prop_key in m3_only:
+        return "derived later by first-order inference (Module 3)"
+    return "supported by the combined pipeline state"
+
+
+def _reason_with_origin(
+    *,
+    evidence: dict[str, bool],
+    prop_key: str,
+    sentence: str,
+    pre_m2: set[str],
+    m2_added: set[str],
+    m3_only: set[str],
+) -> str | None:
+    if evidence.get(prop_key) is not True:
+        return None
+    return (
+        f"{sentence} "
+        f"({_origin_blurb(prop_key, pre_m2=pre_m2, m2_added=m2_added, m3_only=m3_only)})"
+    )
+
+
+def _append_reasoned_timeline_line(
+    timeline: list[str],
+    *,
+    subject_text: str,
+    reason_parts: list[str],
+    fallback_reason: str,
+) -> None:
+    reason = "; ".join(reason_parts) if reason_parts else fallback_reason
+    timeline.append(f"{subject_text}, because {reason}.")
 
 
 def _augment_with_hypothesis(evidence: dict[str, bool], hyp: dict[str, Any]) -> dict[str, bool]:
@@ -47,7 +156,9 @@ def _build_verbal_timeline(
     *,
     solution: dict[str, Any],
     evidence: dict[str, bool],
-    kb_fol_data: dict[str, Any],
+    evidence_pre_m2: dict[str, bool],
+    evidence_post_m2: dict[str, bool],
+    evidence_post_m3: dict[str, bool],
     observations: list[dict[str, Any]] | None = None,
     inferred_facts_data: dict[str, Any] | None = None,
     rule_descriptions: dict[str, str] | None = None,
@@ -59,6 +170,34 @@ def _build_verbal_timeline(
     time = solution.get("time") or "unknown time"
 
     timeline: list[str] = ["Case walkthrough summary:"]
+
+    pre_m2, m2_added, m2_added_n = _module2_evidence_delta(evidence_pre_m2, evidence_post_m2)
+    m2_from_obs = _module2_learned_fact_keys(observations)
+    if m2_added_n == 0 and m2_from_obs:
+        # Some pipelines persist post-Module-2 evidence to the same path used here.
+        # Fallback to observation-derived learned facts to avoid false zero counts.
+        m2_added = set(m2_from_obs)
+        m2_added_n = len(m2_added)
+    post_m2_keys = _true_prop_keys(evidence_post_m2)
+    post_m3_keys = _true_prop_keys(evidence_post_m3)
+    m3_only = post_m3_keys - post_m2_keys
+
+    timeline.append(
+        f"Before Module 2, the initial case file (Module 1 output) contained {len(pre_m2)} true propositions."
+    )
+    timeline.append(
+        f"Module 2 witness queries added {m2_added_n} new true propositions "
+        f"(bringing the working set to {len(post_m2_keys)} before first-order inference)."
+    )
+    if m3_only:
+        timeline.append(
+            f"Module 3 first-order inference then introduced {len(m3_only)} additional true propositions "
+            f"beyond what Module 2 had established."
+        )
+    if observations:
+        timeline.append(
+            f"The Module 2 observation log contains {len(observations)} query actions that produced the additions above."
+        )
 
     inferred_steps = (inferred_facts_data or {}).get("inferred_facts", [])
 
@@ -76,67 +215,140 @@ def _build_verbal_timeline(
 
     rule_room = _first_rule_for("MurderLocation", (room,))
     room_reason_parts: list[str] = []
-    if evidence.get(f"MurderLocation_{room}") is True:
-        room_reason_parts.append(
-            f"bloodstain and scene clues converge on {room} as the likely attack location"
-        )
-    if evidence.get(f"BodyDraggedFrom_{room}") is True:
-        room_reason_parts.append(
-            f"bloody drag marks indicate the body was moved from {room} to the discovery site"
-        )
+    ml_key = f"MurderLocation_{room}"
+    ml_reason = _reason_with_origin(
+        evidence=evidence,
+        prop_key=ml_key,
+        sentence=f"bloodstain and scene clues converge on {room} as the likely attack location",
+        pre_m2=pre_m2,
+        m2_added=m2_added,
+        m3_only=m3_only,
+    )
+    if ml_reason:
+        room_reason_parts.append(ml_reason)
+    bdf_key = f"BodyDraggedFrom_{room}"
+    bdf_reason = _reason_with_origin(
+        evidence=evidence,
+        prop_key=bdf_key,
+        sentence=f"bloody drag marks indicate the body was moved from {room} toward the discovery site",
+        pre_m2=pre_m2,
+        m2_added=m2_added,
+        m3_only=m3_only,
+    )
+    if bdf_reason:
+        room_reason_parts.append(bdf_reason)
     if rule_room:
         room_reason_parts.append(f"this is reinforced by inference rule {rule_room}")
-    room_reason = "; ".join(room_reason_parts) if room_reason_parts else "current strongest hypothesis support"
-    timeline.append(
-        f"The murder location is identified as {room}, because {room_reason}."
+    _append_reasoned_timeline_line(
+        timeline,
+        subject_text=f"The murder location is identified as {room}",
+        reason_parts=room_reason_parts,
+        fallback_reason="current strongest hypothesis support",
     )
 
     rule_time = _first_rule_for("MurderTime", (time,))
     time_reason_parts: list[str] = []
-    if time != "unknown time" and evidence.get(f"MurderTime_{time}") is True:
-        time_reason_parts.append(
-            f"time-linked clues narrow the event window to about {time}"
+    mt_key = f"MurderTime_{time}"
+    mt_reason = (
+        _reason_with_origin(
+            evidence=evidence,
+            prop_key=mt_key,
+            sentence=f"time-linked clues narrow the event window to about {time}",
+            pre_m2=pre_m2,
+            m2_added=m2_added,
+            m3_only=m3_only,
         )
-    if time != "unknown time" and evidence.get(f"DragTraceFresh_{room}_{time}") is True:
-        time_reason_parts.append(
-            f"fresh drag traces in {room} suggest the movement happened around {time}"
+        if time != "unknown time"
+        else None
+    )
+    if mt_reason:
+        time_reason_parts.append(mt_reason)
+    dtf_key = f"DragTraceFresh_{room}_{time}"
+    dtf_reason = (
+        _reason_with_origin(
+            evidence=evidence,
+            prop_key=dtf_key,
+            sentence=f"fresh drag traces in {room} suggest the movement happened around {time}",
+            pre_m2=pre_m2,
+            m2_added=m2_added,
+            m3_only=m3_only,
         )
+        if time != "unknown time"
+        else None
+    )
+    if dtf_reason:
+        time_reason_parts.append(dtf_reason)
     if rule_time:
         time_reason_parts.append(f"the timing is strengthened by inference rule {rule_time}")
-    time_reason = "; ".join(time_reason_parts) if time_reason_parts else "the top-ranked time hypothesis"
-    timeline.append(
-        f"The estimated murder time is {time}, because {time_reason}."
+    _append_reasoned_timeline_line(
+        timeline,
+        subject_text=f"The estimated murder time is {time}",
+        reason_parts=time_reason_parts,
+        fallback_reason="the top-ranked time hypothesis",
     )
 
     rule_culprit = _first_rule_for("Culprit", (culprit, time))
     culprit_reason_parts: list[str] = []
-    if time != "unknown time" and evidence.get(f"Culprit_{culprit}_{time}") is True:
-        culprit_reason_parts.append(
-            f"culprit-focused deductions point to {culprit} during the {time} window"
+    cp_key = f"Culprit_{culprit}_{time}"
+    cp_reason = (
+        _reason_with_origin(
+            evidence=evidence,
+            prop_key=cp_key,
+            sentence=f"culprit-focused deductions point to {culprit} during the {time} window",
+            pre_m2=pre_m2,
+            m2_added=m2_added,
+            m3_only=m3_only,
         )
-    if time != "unknown time" and evidence.get(f"At_{culprit}_{room}_{time}") is True:
-        culprit_reason_parts.append(
-            f"backward tracing places {culprit} at {room} when the critical events occurred"
+        if time != "unknown time"
+        else None
+    )
+    if cp_reason:
+        culprit_reason_parts.append(cp_reason)
+    at_key = f"At_{culprit}_{room}_{time}"
+    at_reason = (
+        _reason_with_origin(
+            evidence=evidence,
+            prop_key=at_key,
+            sentence=f"backward tracing places {culprit} at {room} when the critical events occurred",
+            pre_m2=pre_m2,
+            m2_added=m2_added,
+            m3_only=m3_only,
         )
+        if time != "unknown time"
+        else None
+    )
+    if at_reason:
+        culprit_reason_parts.append(at_reason)
     if rule_culprit:
         culprit_reason_parts.append(f"this alignment is supported by inference rule {rule_culprit}")
-    culprit_reason = "; ".join(culprit_reason_parts) if culprit_reason_parts else "the top-ranked culprit hypothesis"
-    timeline.append(
-        f"The likely culprit is {culprit}, because {culprit_reason}."
+    _append_reasoned_timeline_line(
+        timeline,
+        subject_text=f"The likely culprit is {culprit}",
+        reason_parts=culprit_reason_parts,
+        fallback_reason="the top-ranked culprit hypothesis",
     )
 
     weapon_reason_parts: list[str] = []
-    if evidence.get(f"Weapon_{weapon}_{room}") is True:
-        weapon_reason_parts.append(
-            f"the {weapon} is tied to {room}, matching the reconstructed scene"
-        )
+    wpn_key = f"Weapon_{weapon}_{room}"
+    wpn_reason = _reason_with_origin(
+        evidence=evidence,
+        prop_key=wpn_key,
+        sentence=f"the {weapon} is tied to {room}, matching the reconstructed scene",
+        pre_m2=pre_m2,
+        m2_added=m2_added,
+        m3_only=m3_only,
+    )
+    if wpn_reason:
+        weapon_reason_parts.append(wpn_reason)
     if rule_room:
         weapon_reason_parts.append(
             f"once the scene is traced back to {room}, {weapon} becomes the most consistent instrument"
         )
-    weapon_reason = "; ".join(weapon_reason_parts) if weapon_reason_parts else "the top-ranked weapon hypothesis"
-    timeline.append(
-        f"The likely weapon is {weapon}, because {weapon_reason}."
+    _append_reasoned_timeline_line(
+        timeline,
+        subject_text=f"The likely weapon is {weapon}",
+        reason_parts=weapon_reason_parts,
+        fallback_reason="the top-ranked weapon hypothesis",
     )
 
     return timeline
@@ -146,12 +358,22 @@ def _build_case_story(
     *,
     solution: dict[str, Any],
     evidence: dict[str, bool],
+    evidence_pre_m2: dict[str, bool],
+    evidence_post_m2: dict[str, bool],
+    observations: list[dict[str, Any]] | None = None,
 ) -> list[str]:
     """Create a scenario narrative that varies by game state."""
     culprit = str(solution.get("culprit") or "an unknown suspect")
     weapon = str(solution.get("weapon") or "an unknown weapon")
     room = str(solution.get("room") or "an unknown room")
     time = str(solution.get("time") or "an unknown time")
+
+    pre_m2, _, m2_added_n = _module2_evidence_delta(evidence_pre_m2, evidence_post_m2)
+    m2_from_obs = _module2_learned_fact_keys(observations)
+    # If pre/post snapshots overlap, set-diff can report zero.
+    # Prefer observation-derived learned facts when available.
+    if m2_from_obs:
+        m2_added_n = len(m2_from_obs)
 
     seed_text = f"{culprit}|{weapon}|{room}|{time}"
     variant = sum(ord(ch) for ch in seed_text) % 3
@@ -182,14 +404,17 @@ def _build_case_story(
         f"The link between {weapon} and {room} makes it the most consistent instrument in this scenario.",
     ]
 
+    post_m2_count = len(_true_prop_keys(evidence_post_m2))
     story = [
+        f"Before Module 2, the detective had only the Module 1 case file: {len(pre_m2)} true facts.",
+        f"Module 2 witness queries added {m2_added_n} new true facts (running total {post_m2_count} before Module 3 inference).",
         openers[variant],
         scene_lines[variant],
         culprit_lines[variant],
         weapon_lines[variant],
     ]
     if evidence.get(f"BodyDraggedFrom_{room}") is True:
-        story.insert(2, drag_lines[variant])
+        story.insert(4, drag_lines[variant])
 
     return story
 
@@ -207,10 +432,12 @@ def _build_grid_visual_payload(
         time_points,
         murder_time=focus_time,
     )
-    grid_cells: list[list[dict[str, Any] | None]] = [[None, None, None] for _ in range(3)]
-    for idx, room in enumerate(rooms[:9]):
-        r = idx // 3
-        c = idx % 3
+    grid_cells: list[list[dict[str, Any] | None]] = [
+        [None for _ in range(GRID_DIMENSION)] for _ in range(GRID_DIMENSION)
+    ]
+    for idx, room in enumerate(rooms[: GRID_DIMENSION * GRID_DIMENSION]):
+        r = idx // GRID_DIMENSION
+        c = idx % GRID_DIMENSION
         room_state = state.get(room, {}).get(focus_time or "", {})
         grid_cells[r][c] = {
             "room": room,
@@ -238,8 +465,8 @@ def _grid_payload_to_ascii(grid_payload: dict[str, Any]) -> str:
                 row_cells.append("[empty]")
                 continue
             room = cell.get("room", "?")
-            people = ",".join(cell.get("people", [])[:2]) or "-"
-            weapons = ",".join(cell.get("weapons", [])[:2]) or "-"
+            people = ",".join(cell.get("people", [])[:ASCII_ROW_PERSON_LIMIT]) or "-"
+            weapons = ",".join(cell.get("weapons", [])[:ASCII_ROW_WEAPON_LIMIT]) or "-"
             flags: list[str] = []
             if cell.get("body_found"):
                 flags.append("Body")
@@ -276,7 +503,7 @@ def build_steps(
     obs_data = _load_json(module2_observations_path)
     for obs in obs_data.get("observations", []):
         action = obs.get("action", "")
-        value = obs.get("result")
+        value = _coerce_obs_result(obs.get("result"))
         if value is True:
             final_kb[action] = True
         elif value is False and (action.startswith("KeyFound_") or action.startswith("At_")):
@@ -311,11 +538,16 @@ def build_steps(
     story_lines = _build_case_story(
         solution=solution4,
         evidence=evidence4,
+        evidence_pre_m2=evidence1,
+        evidence_post_m2=final_kb,
+        observations=obs_data.get("observations", []),
     )
     verbal_timeline = _build_verbal_timeline(
         solution=solution4,
         evidence=evidence4,
-        kb_fol_data=kb_fol_data,
+        evidence_pre_m2=evidence1,
+        evidence_post_m2=final_kb,
+        evidence_post_m3=evidence3,
         observations=obs_data.get("observations", []),
         inferred_facts_data=inferred_facts_data,
         rule_descriptions=rule_descriptions,
@@ -334,7 +566,10 @@ def build_steps(
             "title": "Module 2 — After query planning & observations",
             "solution": solution2,
             "evidence": final_kb,
-            "extra_lines": ["Module 2 added witness-query observations.", *_summarize_new_facts(evidence1, final_kb)],
+            "extra_lines": [
+                "Module 2 added witness-query observations.",
+                *_summarize_module2_observations(obs_data.get("observations", [])),
+            ],
         },
         {
             "module_id": 3,
