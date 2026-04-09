@@ -236,19 +236,27 @@ def _show_room_9x9_map_popup(
 
     popup = tk.Toplevel(parent_root)
     popup.title(title)
+    popup.configure(background="#f3f6fb")
 
-    cell = 120
+    cell = 130
     grid = 3
     canvas_w = grid * cell
     canvas_h = grid * cell
-    canvas = tk.Canvas(popup, width=canvas_w, height=canvas_h, background="white")
-    canvas.pack(fill=tk.BOTH, expand=True)
+    canvas = tk.Canvas(
+        popup,
+        width=canvas_w,
+        height=canvas_h,
+        background="#f3f6fb",
+        highlightthickness=0,
+        bd=0,
+    )
+    canvas.pack(fill=tk.BOTH, expand=True, padx=10, pady=(10, 4))
 
     # Draw background grid.
     for i in range(grid + 1):
         x = i * cell
-        canvas.create_line(x, 0, x, canvas_h, fill="#ddd")
-        canvas.create_line(0, i * cell, canvas_w, i * cell, fill="#ddd")
+        canvas.create_line(x, 0, x, canvas_h, fill="#dbe4f2")
+        canvas.create_line(0, i * cell, canvas_w, i * cell, fill="#dbe4f2")
 
     # Draw each room in its mapped cell.
     for room_idx, room_name in enumerate(rooms[:9]):
@@ -266,21 +274,29 @@ def _show_room_9x9_map_popup(
         body_found = s.get("body_found")
         dragged_from = s.get("dragged_from")
 
-        fill = "#ffdddd" if body_found else "#f7f7ff"
-        outline = "#b00" if body_found else "#445"
-        canvas.create_rectangle(x0, y0, x0 + cell, y0 + cell, fill=fill, outline=outline, width=2)
+        fill = "#ffdede" if body_found else "#eef3ff"
+        outline = "#b34040" if body_found else "#52627a"
+        canvas.create_rectangle(
+            x0 + 4,
+            y0 + 4,
+            x0 + cell - 4,
+            y0 + cell - 4,
+            fill=fill,
+            outline=outline,
+            width=2,
+        )
 
         lines: list[str] = [room_name]
         if body_found:
-            lines.append("Body")
+            lines.append("[B] Body")
         if dragged_from:
-            lines.append("DraggedFrom")
+            lines.append("[D] DraggedFrom")
         if people:
             lines.append("P: " + ", ".join(people[:3]))
         if weapons:
             lines.append("W: " + ", ".join(weapons[:2]))
         if locked is True:
-            lines.append("Locked")
+            lines.append("[L] Locked")
 
         canvas.create_text(
             x0 + cell / 2,
@@ -290,6 +306,16 @@ def _show_room_9x9_map_popup(
             fill="#111",
             justify="center",
         )
+
+    legend = tk.Label(
+        popup,
+        text="[B]=Body  [D]=DraggedFrom  [L]=DoorLocked  P=People  W=Weapons",
+        bg="#f3f6fb",
+        fg="#243447",
+        anchor="w",
+        padx=12,
+    )
+    legend.pack(fill=tk.X, pady=(0, 10))
 
 
 def show_case_view(
@@ -424,10 +450,18 @@ def show_case_view_multi(
         return
 
     root = tk.Tk()
+    root.configure(background="#f3f6fb")
     module_ids = [str(s.get("module_id", "?")) for s in steps]
     root.title("Detective AI — Case viewer (Module " + " → ".join(module_ids) + ")")
     root.geometry("780x560")
     root.minsize(450, 320)
+    style = ttk.Style(root)
+    try:
+        style.theme_use("clam")
+    except Exception:
+        pass
+    style.configure("Treeview", rowheight=24)
+    style.configure("Treeview.Heading", font=("", 10, "bold"))
 
     main = ttk.Frame(root, padding=10)
     main.pack(fill=tk.BOTH, expand=True)
@@ -447,9 +481,15 @@ def show_case_view_multi(
     module4_box.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
     module5_box.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-    actual_label = ttk.Label(actual_box, text="", justify=tk.LEFT)
-    module4_label = ttk.Label(module4_box, text="", justify=tk.LEFT)
-    module5_label = ttk.Label(module5_box, text="", justify=tk.LEFT)
+    actual_label = tk.Label(
+        actual_box, text="", justify=tk.LEFT, bg="#ecfff0", fg="#12361c", padx=6, pady=4
+    )
+    module4_label = tk.Label(
+        module4_box, text="", justify=tk.LEFT, bg="#eef3ff", fg="#1f3555", padx=6, pady=4
+    )
+    module5_label = tk.Label(
+        module5_box, text="", justify=tk.LEFT, bg="#fff7e8", fg="#5a3d0c", padx=6, pady=4
+    )
     actual_label.pack(anchor=tk.W, fill=tk.X)
     module4_label.pack(anchor=tk.W, fill=tk.X)
     module5_label.pack(anchor=tk.W, fill=tk.X)
@@ -473,8 +513,8 @@ def show_case_view_multi(
         return f"Culprit: {culp}\nWeapon: {weap}\nRoom: {room}\nTime: {time}"
 
     actual_label.config(text=_render_solution(actual_solution))
-    module4_label.config(text=_render_solution(module4_solution) if module4_solution else "Not generated")
-    module5_label.config(text=_render_solution(module5_solution) if module5_solution else "Not generated")
+    module4_label.config(text="Hidden until Module 4")
+    module5_label.config(text="Hidden until Module 5")
 
     btn_frame = ttk.Frame(main)
     btn_frame.pack(fill=tk.X, pady=(6, 2))
@@ -524,6 +564,9 @@ def show_case_view_multi(
     for col in columns:
         tree.heading(col, text=col)
         tree.column(col, width=150 if col == "Room" else 150)
+    tree.tag_configure("body_row", background="#ffe9e9")
+    tree.tag_configure("drag_row", background="#fff4e2")
+    tree.tag_configure("normal_row", background="#ffffff")
     vsb = ttk.Scrollbar(grid_frame, orient=tk.VERTICAL, command=tree.yview)
     tree.configure(yscrollcommand=vsb.set)
     tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
@@ -536,6 +579,14 @@ def show_case_view_multi(
         solution = step["solution"]
         header_label.config(text=f"Detective AI — Module {step['module_id']} Case View")
         root.title(step["title"])
+        if step.get("module_id", 0) >= 4 and module4_solution:
+            module4_label.config(text=_render_solution(module4_solution))
+        else:
+            module4_label.config(text="Hidden until Module 4")
+        if step.get("module_id", 0) >= 5 and module5_solution:
+            module5_label.config(text=_render_solution(module5_solution))
+        else:
+            module5_label.config(text="Hidden until Module 5")
         # Actual + Module 4 hypothesis boxes stay fixed while cycling modules.
         # The evidence grid still uses the current step's solution time.
         for lb in extra_labels:
@@ -559,6 +610,8 @@ def show_case_view_multi(
             tree.delete(item)
         for room_name in rooms:
             row = [room_name]
+            row_has_body = False
+            row_has_drag = False
             for t in time_points:
                 s = state.get(room_name, {}).get(t, {})
                 people = s.get("people", [])
@@ -568,17 +621,20 @@ def show_case_view_multi(
                 dragged_from = s.get("dragged_from")
                 parts = []
                 if body_found:
-                    parts.append("Body")
+                    parts.append("[B] Body")
+                    row_has_body = True
                 if dragged_from:
-                    parts.append("DraggedFrom")
+                    parts.append("[D] Dragged")
+                    row_has_drag = True
                 if people:
                     parts.append(", ".join(people))
                 if weapons:
                     parts.append("W: " + ", ".join(weapons))
                 if locked is True:
-                    parts.append("Locked")
+                    parts.append("[L] Locked")
                 row.append(", ".join(parts) if parts else "—")
-            tree.insert("", tk.END, values=row)
+            tag = "body_row" if row_has_body else ("drag_row" if row_has_drag else "normal_row")
+            tree.insert("", tk.END, values=row, tags=(tag,))
         step_label.config(text=f"Step {idx_var[0] + 1}/{len(steps)}")
 
     def on_prev() -> None:
