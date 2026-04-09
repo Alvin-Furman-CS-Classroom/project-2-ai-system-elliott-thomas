@@ -410,7 +410,7 @@ def show_case_view_multi(
     rooms: list[str],
     time_points: list[str],
 ) -> None:
-    """Show one window with a 'Next module' button to cycle through Module 1 → 2 → 3 → 4 state.
+    """Show one window with a 'Next module' button to cycle through steps.
 
     steps: list of dicts, each with keys module_id, title, solution, evidence, extra_lines.
     rooms, time_points: same for all steps.
@@ -424,7 +424,8 @@ def show_case_view_multi(
         return
 
     root = tk.Tk()
-    root.title("Detective AI — Case viewer (Module 1 → 2 → 3)")
+    module_ids = [str(s.get("module_id", "?")) for s in steps]
+    root.title("Detective AI — Case viewer (Module " + " → ".join(module_ids) + ")")
     root.geometry("780x560")
     root.minsize(450, 320)
 
@@ -441,21 +442,28 @@ def show_case_view_multi(
 
     actual_box = ttk.LabelFrame(sol_frame, text="Actual Solution", padding=5)
     module4_box = ttk.LabelFrame(sol_frame, text="Module 4 Hypothesis", padding=5)
+    module5_box = ttk.LabelFrame(sol_frame, text="Module 5 Output", padding=5)
     actual_box.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
     module4_box.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+    module5_box.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
     actual_label = ttk.Label(actual_box, text="", justify=tk.LEFT)
     module4_label = ttk.Label(module4_box, text="", justify=tk.LEFT)
+    module5_label = ttk.Label(module5_box, text="", justify=tk.LEFT)
     actual_label.pack(anchor=tk.W, fill=tk.X)
     module4_label.pack(anchor=tk.W, fill=tk.X)
+    module5_label.pack(anchor=tk.W, fill=tk.X)
 
     actual_solution: dict[str, str | None] = {}
     module4_solution: dict[str, str | None] = {}
+    module5_solution: dict[str, str | None] = {}
     for s in steps:
         if not actual_solution and s.get("module_id") in (0, 1):
             actual_solution = s.get("solution") or {}
         if not module4_solution and s.get("module_id") == 4:
             module4_solution = s.get("solution") or {}
+        if not module5_solution and s.get("module_id") == 5:
+            module5_solution = s.get("solution") or {}
 
     def _render_solution(sol: dict[str, str | None]) -> str:
         culp = sol.get("culprit") or "?"
@@ -466,10 +474,44 @@ def show_case_view_multi(
 
     actual_label.config(text=_render_solution(actual_solution))
     module4_label.config(text=_render_solution(module4_solution) if module4_solution else "Not generated")
+    module5_label.config(text=_render_solution(module5_solution) if module5_solution else "Not generated")
+
+    btn_frame = ttk.Frame(main)
+    btn_frame.pack(fill=tk.X, pady=(6, 2))
+    step_label = ttk.Label(btn_frame, text="")
+    step_label.pack(side=tk.RIGHT)
+    ttk.Button(
+        btn_frame,
+        text="Previous module",
+        command=lambda: on_prev(),
+    ).pack(side=tk.LEFT)
+    ttk.Button(
+        btn_frame,
+        text="Next module (" + " → ".join(module_ids) + ")",
+        command=lambda: on_next(),
+    ).pack(side=tk.LEFT, padx=(8, 0))
+    ttk.Button(
+        btn_frame,
+        text="Jump to Module 1",
+        command=lambda: on_first(),
+    ).pack(side=tk.LEFT, padx=(8, 0))
+    ttk.Button(
+        btn_frame,
+        text="Open 3x3 room map",
+        command=lambda: _show_room_9x9_map_popup(
+            root,
+            f"{steps[idx_var[0]]['title']} — 3x3 map",
+            steps[idx_var[0]].get("solution", {}),
+            steps[idx_var[0]].get("evidence", {}),
+            rooms,
+            time_points,
+        ),
+    ).pack(side=tk.LEFT, padx=(10, 0))
 
     extra_frame = ttk.Frame(main)
     extra_frame.pack(fill=tk.X)
     extra_labels: list[ttk.Label] = []
+    max_extra_lines = 8
 
     grid_frame = ttk.LabelFrame(
         main,
@@ -495,12 +537,19 @@ def show_case_view_multi(
         header_label.config(text=f"Detective AI — Module {step['module_id']} Case View")
         root.title(step["title"])
         # Actual + Module 4 hypothesis boxes stay fixed while cycling modules.
-        # The evidence grid still uses the *current step's* solution time.
+        # The evidence grid still uses the current step's solution time.
         for lb in extra_labels:
             lb.destroy()
         extra_labels.clear()
-        for line in step.get("extra_lines") or []:
+        lines = list(step.get("extra_lines") or [])
+        shown = lines[:max_extra_lines]
+        for line in shown:
             lb = ttk.Label(extra_frame, text=line)
+            lb.pack(anchor=tk.W)
+            extra_labels.append(lb)
+        if len(lines) > max_extra_lines:
+            more = len(lines) - max_extra_lines
+            lb = ttk.Label(extra_frame, text=f"... ({more} more lines hidden)")
             lb.pack(anchor=tk.W)
             extra_labels.append(lb)
         state = parse_evidence_to_room_state(
@@ -530,33 +579,19 @@ def show_case_view_multi(
                     parts.append("Locked")
                 row.append(", ".join(parts) if parts else "—")
             tree.insert("", tk.END, values=row)
-        step_label.config(text=f"Step {idx_var[0] + 1} of {len(steps)}")
+        step_label.config(text=f"Step {idx_var[0] + 1}/{len(steps)}")
+
+    def on_prev() -> None:
+        idx_var[0] = (idx_var[0] - 1) % len(steps)
+        refresh()
 
     def on_next() -> None:
         idx_var[0] = (idx_var[0] + 1) % len(steps)
         refresh()
 
-    btn_frame = ttk.Frame(main)
-    btn_frame.pack(fill=tk.X, pady=(6, 0))
-    ttk.Button(
-        btn_frame,
-        text="Next module (init → 1 → 2 → 3 → 4)",
-        command=on_next,
-    ).pack(side=tk.LEFT)
-    ttk.Button(
-        btn_frame,
-        text="Open 3x3 map",
-        command=lambda: _show_room_9x9_map_popup(
-            root,
-            f"{steps[idx_var[0]]['title']} — 3x3 map",
-            steps[idx_var[0]].get("solution", {}),
-            steps[idx_var[0]].get("evidence", {}),
-            rooms,
-            time_points,
-        ),
-    ).pack(side=tk.LEFT, padx=(10, 0))
-    step_label = ttk.Label(btn_frame, text="")
-    step_label.pack(side=tk.LEFT, padx=(8, 0))
+    def on_first() -> None:
+        idx_var[0] = 0
+        refresh()
 
     refresh()
 
