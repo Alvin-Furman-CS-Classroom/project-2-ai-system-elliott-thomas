@@ -25,6 +25,7 @@ ASCII_ROW_WEAPON_LIMIT = 2
 
 
 def _load_json(path: str | Path) -> dict[str, Any]:
+    """Load JSON from disk with clear error messages for missing or invalid files."""
     target = Path(path)
     try:
         with open(target, encoding="utf-8") as f:
@@ -49,13 +50,14 @@ def _coerce_obs_result(value: Any) -> bool | None:
 
 
 def _true_prop_keys(evidence: dict[str, bool]) -> set[str]:
+    """Return only proposition keys currently marked as true in the evidence map."""
     return {k for k, v in evidence.items() if v is True}
 
 
 def _module2_evidence_delta(
     evidence_pre_m2: dict[str, bool], evidence_post_m2: dict[str, bool]
 ) -> tuple[set[str], set[str], int]:
-    """Facts true before Module 2, facts newly true after Module 2, and count added."""
+    """Compare pre/post Module 2 evidence and report which true facts were added."""
     pre = _true_prop_keys(evidence_pre_m2)
     post = _true_prop_keys(evidence_post_m2)
     added = post - pre
@@ -63,7 +65,7 @@ def _module2_evidence_delta(
 
 
 def _module2_learned_fact_keys(observations: list[dict[str, Any]] | None) -> set[str]:
-    """Facts learned from Module 2 observation outcomes."""
+    """Extract proposition keys learned from Module 2 observation results."""
     learned: set[str] = set()
     for obs in observations or []:
         action = str(obs.get("action", "")).strip()
@@ -78,6 +80,7 @@ def _module2_learned_fact_keys(observations: list[dict[str, Any]] | None) -> set
 
 
 def _summarize_module2_observations(observations: list[dict[str, Any]] | None) -> list[str]:
+    """Build short display lines describing learned facts from Module 2 observations."""
     learned = sorted(_module2_learned_fact_keys(observations))
     if not learned:
         return []
@@ -96,7 +99,7 @@ def _origin_blurb(
     m2_added: set[str],
     m3_only: set[str],
 ) -> str:
-    """Short attribution for where a proposition entered the working KB."""
+    """Return a short source label for where a proposition likely came from."""
     if prop_key in pre_m2:
         return "already established in the initial case (Module 1)"
     if prop_key in m2_added:
@@ -115,6 +118,7 @@ def _reason_with_origin(
     m2_added: set[str],
     m3_only: set[str],
 ) -> str | None:
+    """Create one reason sentence for a proposition, including where the fact came from."""
     if evidence.get(prop_key) is not True:
         return None
     return (
@@ -130,11 +134,13 @@ def _append_reasoned_timeline_line(
     reason_parts: list[str],
     fallback_reason: str,
 ) -> None:
+    """Append a timeline sentence using specific reasons or a fallback explanation."""
     reason = "; ".join(reason_parts) if reason_parts else fallback_reason
     timeline.append(f"{subject_text}, because {reason}.")
 
 
 def _augment_with_hypothesis(evidence: dict[str, bool], hyp: dict[str, Any]) -> dict[str, bool]:
+    """Return a copy of evidence enriched with the current best hypothesis facts."""
     out = dict(evidence)
     culprit = hyp.get("culprit")
     weapon = hyp.get("weapon")
@@ -163,7 +169,7 @@ def _build_verbal_timeline(
     inferred_facts_data: dict[str, Any] | None = None,
     rule_descriptions: dict[str, str] | None = None,
 ) -> list[str]:
-    """Create timeline sentences tied to culprit/weapon/room/time."""
+    """Build a human-readable reasoning timeline for the final ranked solution."""
     culprit = solution.get("culprit") or "Unknown"
     weapon = solution.get("weapon") or "Unknown weapon"
     room = solution.get("room") or "Unknown room"
@@ -202,6 +208,7 @@ def _build_verbal_timeline(
     inferred_steps = (inferred_facts_data or {}).get("inferred_facts", [])
 
     def _first_rule_for(predicate: str, args: tuple[str, ...]) -> str | None:
+        """Find the first inference-rule record that produced a target fact shape."""
         for step in inferred_steps:
             fact = step.get("fact", {})
             if fact.get("predicate") != predicate:
@@ -362,7 +369,7 @@ def _build_case_story(
     evidence_post_m2: dict[str, bool],
     observations: list[dict[str, Any]] | None = None,
 ) -> list[str]:
-    """Create a scenario narrative that varies by game state."""
+    """Generate a short story-style recap of the case from current evidence."""
     culprit = str(solution.get("culprit") or "an unknown suspect")
     weapon = str(solution.get("weapon") or "an unknown weapon")
     room = str(solution.get("room") or "an unknown room")
@@ -426,6 +433,7 @@ def _build_grid_visual_payload(
     time_points: list[str],
     focus_time: str | None,
 ) -> dict[str, Any]:
+    """Convert evidence into a fixed 3x3 room-grid payload for the final display."""
     state = parse_evidence_to_room_state(
         evidence,
         rooms,
@@ -454,6 +462,7 @@ def _build_grid_visual_payload(
 
 
 def _grid_payload_to_ascii(grid_payload: dict[str, Any]) -> str:
+    """Render the room-grid payload as a plain-text table for non-GUI outputs."""
     lines: list[str] = []
     focus_time = grid_payload.get("focus_time") or "unknown"
     lines.append(f"3x3 room grid at time: {focus_time}")
@@ -489,7 +498,7 @@ def build_steps(
     inferred_facts_path: str | Path | None,
     hypotheses_ranked_path: str | Path,
 ) -> tuple[list[dict[str, Any]], list[str], list[str]]:
-    """Build viewer steps from module artifacts."""
+    """Assemble the five walkthrough snapshots consumed by the case viewer UI."""
     evidence1, rooms, time_points, metadata = load_evidence_and_rules_for_view(
         evidence_path, rules_path
     )
@@ -619,7 +628,7 @@ def run(
     show_view: bool = True,
     output_dir: str | Path | None = None,
 ) -> dict[str, Any]:
-    """Build and optionally render the Module 5 walkthrough.
+    """Run Module 5 end-to-end: build steps, derive visuals, optionally render/write outputs.
 
     If output_dir is provided, writes `module_5_visual_display.json` containing
     the full display payload (steps, rooms, time points) so the visual output is
