@@ -1,0 +1,612 @@
+"""Module 1: Propositional logic knowledge base and inference for Detective AI."""
+# Thomas Corbin and Elliott Chmil
+# Written with the help of Cursor Agent
+# 1/29/2026
+#
+# KB design: the knowledge base stores only TRUE values. A proposition that is
+# not in the KB is treated as false; false propositions cannot imply or chain
+# to become true.
+
+import itertools
+import json
+import random
+from pathlib import Path
+from typing import Any
+
+# Placeholder names in rule templates; order matters for substitution (longer first to avoid ROOM matching inside ROOM1)
+_PLACEHOLDERS = ("ROOM1", "ROOM2", "PERSON", "ROOM", "TIME", "WEAPON")
+
+_CONTRADICTION_KEY = "CONTRADICTION"
+_CONTRADICTION_GROUNDED_RULES_KEY = "_CONTRADICTION_GROUNDED_RULES"  # List of full grounded rules that fired CONTRADICTION (id + if + then).
+
+# Which key in game_constraints each placeholder uses
+_PLACEHOLDER_TO_KEY = {
+    "PERSON": "suspects",
+    "ROOM": "rooms",
+    "ROOM1": "rooms",
+    "ROOM2": "rooms",
+    "TIME": "time_points",
+    "WEAPON": "weapons",
+}
+
+
+def read_rules(path: str | Path) -> dict:
+    """Load rules from a JSON file.
+
+    Args:
+        path: File path to rules.json (str or Path).
+
+    Returns:
+        dict with keys rules (list of {id, if, then}), game_constraints, metadata.
+
+    Raises:
+        FileNotFoundError: If the file does not exist.
+        ValueError: If the file exists but is not valid JSON or has unexpected structure.
+    """
+    path = Path(path)
+    try:
+        with open(path, encoding="utf-8") as file_handle:
+            data = json.load(file_handle)
+    except FileNotFoundError:
+        raise
+    except OSError as e:
+        raise OSError(f"Failed to read rules file {path}: {e}") from e
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Invalid JSON in rules file {path}: {e}") from e
+
+    if not isinstance(data, dict):
+        raise ValueError(f"rules file {path} must contain a JSON object (dict), got {type(data).__name__}")
+
+    return data
+
+
+def read_case_init(path: str | Path) -> dict:
+    """Load case initialization from a JSON file.
+
+    Args:
+        path: File path to case_init.json (str or Path).
+
+    Returns:
+        dict with keys kb_evidence, witness_knowledge, metadata.
+        File format may have initial_evidence (all facts); that is returned as kb_evidence
+        with witness_knowledge empty (witness facts are for runtime queries).
+
+    Raises:
+        FileNotFoundError: If the file does not exist.
+        ValueError: If the file exists but is not valid JSON or has unexpected structure.
+    """
+    path = Path(path)
+    try:
+        with open(path, encoding="utf-8") as file_handle:
+            data = json.load(file_handle)
+    except FileNotFoundError:
+        raise
+    except OSError as e:
+        raise OSError(f"Failed to read case init file {path}: {e}") from e
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Invalid JSON in case init file {path}: {e}") from e
+
+    if not isinstance(data, dict):
+        raise ValueError(
+            f"case init file {path} must contain a JSON object (dict), got {type(data).__name__}"
+        )
+
+    initial = data.get("initial_evidence", data.get("kb_evidence", {}))
+    metadata = data.get("metadata", {})
+    # If file has both kb_evidence and witness_knowledge, use them; else treat all as kb_evidence.
+    kb_evidence = data.get("kb_evidence", initial)
+    witness_knowledge = data.get("witness_knowledge", {})
+    if not kb_evidence and initial:
+        kb_evidence = dict(initial)
+        witness_knowledge = {}
+
+    return {
+        "kb_evidence": kb_evidence,
+        "witness_knowledge": witness_knowledge,
+        "metadata": metadata,
+    }
+
+
+# --- Random case generation (Clue-style) ---
+
+# Probability thresholds for random case generation (avoid magic numbers).
+_FINGERPRINT_PROB = 0.3  # P(no fingerprints) when person was in room
+_DOOR_LOCKED_MURDER_ROOM = 0.2  # P(door not locked) in murder room at murder time
+_DOOR_LOCKED_OTHER = 0.7  # P(door not locked) elsewhere
+_NOISE_HEARD_MURDER_ROOM = 0.3  # P(no noise) in murder room at murder time
+_NOISE_HEARD_OTHER = 0.8  # P(no noise) elsewhere
+_KEY_FOUND_PROB = 0.8  # P(no key found) in a room
+
+# Easy difficulty: at murder time, innocents usually avoid the murder room so At_* facts
+# discriminate better; with the remaining probability they may still land there (soft red herring).
+_EASY_EXCLUDE_MURDER_ROOM_AT_MURDER_TIME = 0.85
+
+_VALID_DIFFICULTIES = frozenset({"normal", "easy"})
+
+
+def generate_random_case(
+    rules_path: str | Path,
+    seed: int | None = None,
+    kb_ratio: float = 0.5,
+    murder_time: str | None = None,
+    difficulty: str = "easy",
+) -> dict:
+    """Generate a random Clue case following board game initialization rules.
+
+    Per AIgent Proposal: Module 1 takes case_init.json with initial evidence.
+    This function generates such a case randomly:
+    1. Randomly selects culprit, weapon, room (the "case file" - hidden solution)
+    2. Randomly places weapons in rooms
+    3. Randomly assigns people to locations at different times (``easy``: innocents
+       at murder time usually avoid the murder room)
+    4. Generates consistent facts (fingerprints, alibis, etc.)
+    5. Randomly splits facts into kb_evidence (known) and witness_knowledge (queryable)
+    6. Seeds ``VictimFound_<solution_room>`` into kb_evidence (murder room = envelope room card)
+
+    Args:
+        rules_path: Path to rules.json (to get game_constraints).
+        seed: Optional random seed for reproducibility.
+        kb_ratio: Fraction of facts to put in kb_evidence (rest go to witness_knowledge).
+        murder_time: Optional specific time for murder (default: random from time_points).
+        difficulty: ``"easy"`` (default) or ``"normal"``. In ``"easy"``, non-culprits at
+            murder time avoid the murder room with probability
+            ``_EASY_EXCLUDE_MURDER_ROOM_AT_MURDER_TIME`` (otherwise full random room).
+
+    Returns:
+        dict with keys kb_evidence, witness_knowledge, metadata.
+        Same structure as read_case_init() for compatibility.
+        Metadata includes ``_difficulty``, ``_solution_culprit``, ``_solution_weapon``,
+        ``_solution_room``, ``_solution_time``.
+    """
+    if seed is not None:
+        random.seed(seed)
+
+    difficulty_norm = difficulty.strip().lower()
+    if difficulty_norm not in _VALID_DIFFICULTIES:
+        raise ValueError(
+            f"difficulty must be one of {sorted(_VALID_DIFFICULTIES)}, got {difficulty!r}"
+        )
+
+    rules = read_rules(rules_path)
+    constraints = rules.get("game_constraints", {})
+    suspects = constraints.get("suspects", [])
+    weapons = constraints.get("weapons", [])
+    rooms = constraints.get("rooms", [])
+    time_points = constraints.get("time_points", ["8pm", "9pm", "10pm"])
+
+    if not suspects or not weapons or not rooms:
+        raise ValueError("game_constraints must include suspects, weapons, and rooms")
+
+    # Step 1: Create the "case file" - randomly select culprit, weapon, room
+    culprit = random.choice(suspects)
+    weapon = random.choice(weapons)
+    room = random.choice(rooms)
+    if murder_time is None:
+        murder_time = random.choice(time_points)
+
+    # Step 2: Randomly place weapons in rooms (murder weapon goes to murder room)
+    weapon_locations: dict[str, str] = {}
+    # Reserve the murder room for the murder weapon only.
+    available_rooms = [r for r in rooms if r != room]
+    for w in weapons:
+        if w == weapon:
+            weapon_locations[w] = room  # Murder weapon in murder room
+        else:
+            if available_rooms:
+                loc = random.choice(available_rooms)
+                weapon_locations[w] = loc
+                # Don't place multiple weapons in same room (optional rule)
+                available_rooms.remove(loc)
+                # If we run out of non-murder rooms (shouldn't happen),
+                # fall back to all rooms.
+                if not available_rooms:
+                    available_rooms = rooms.copy()
+
+    # Step 3: Generate all possible facts with correct truth values
+    all_facts: dict[str, bool] = {}
+
+    # VictimFound: only in murder room
+    for r in rooms:
+        all_facts[f"VictimFound_{r}"] = r == room
+
+    # BloodStains: only in murder room
+    for r in rooms:
+        all_facts[f"BloodStains_{r}"] = r == room
+
+    # Weapon locations
+    for w, r in weapon_locations.items():
+        for room_option in rooms:
+            all_facts[f"Weapon_{w}_{room_option}"] = room_option == r
+
+    # Culprit facts: only true for the actual culprit at murder time
+    for s in suspects:
+        for t in time_points:
+            all_facts[f"Culprit_{s}_{t}"] = s == culprit and t == murder_time
+            # Alibi: true if person is NOT the culprit at that time
+            all_facts[f"Alibi_{s}_{t}"] = not (s == culprit and t == murder_time)
+
+    # At(person, room, time): randomly assign locations, but ensure consistency.
+    # Each person is in exactly one room at each time, and the culprit is in the
+    # murder room at the murder time (so culprit, weapon, and body all co-locate then).
+    person_locations: dict[tuple[str, str], str] = {}
+    for person in suspects:
+        for time in time_points:
+            # Culprit must be in the murder room at the murder time; everyone
+            # else (and other times) are placed randomly.
+            if person == culprit and time == murder_time:
+                loc = room
+            elif (
+                difficulty_norm == "easy"
+                and time == murder_time
+                and person != culprit
+                and random.random() < _EASY_EXCLUDE_MURDER_ROOM_AT_MURDER_TIME
+            ):
+                other_rooms = [r for r in rooms if r != room]
+                loc = random.choice(other_rooms) if other_rooms else random.choice(rooms)
+            else:
+                loc = random.choice(rooms)
+            person_locations[(person, time)] = loc
+            for r in rooms:
+                all_facts[f"At_{person}_{r}_{time}"] = r == loc
+
+    # Fingerprints: if person was in room, they might have left fingerprints
+    # (random chance, but higher if they were actually there)
+    for person in suspects:
+        for r in rooms:
+            # Check if person was ever in this room
+            was_there = any(
+                person_locations.get((person, t)) == r for t in time_points
+            )
+            # Higher probability if they were there, but not guaranteed
+            all_facts[f"Fingerprints_{r}_{person}"] = was_there and random.random() > _FINGERPRINT_PROB
+
+    # DoorLocked: random, but more likely in murder room at murder time
+    for r in rooms:
+        for t in time_points:
+            if r == room and t == murder_time:
+                all_facts[f"DoorLocked_{r}_{t}"] = random.random() > _DOOR_LOCKED_MURDER_ROOM
+            else:
+                all_facts[f"DoorLocked_{r}_{t}"] = random.random() > _DOOR_LOCKED_OTHER
+
+    # NoiseHeard: more likely in murder room at murder time
+    for r in rooms:
+        for t in time_points:
+            if r == room and t == murder_time:
+                all_facts[f"NoiseHeard_{r}_{t}"] = random.random() > _NOISE_HEARD_MURDER_ROOM
+            else:
+                all_facts[f"NoiseHeard_{r}_{t}"] = random.random() > _NOISE_HEARD_OTHER
+
+    # KeyFound: random
+    for r in rooms:
+        all_facts[f"KeyFound_{r}"] = random.random() > _KEY_FOUND_PROB
+
+    # Step 4: Remove case file facts (culprit, weapon, room) - these are hidden
+    # Remove all Culprit facts (they reveal the solution)
+    case_file_facts = {
+        k for k in all_facts.keys() if k.startswith("Culprit_")
+    }
+
+    # Step 5: Randomly split remaining facts into kb_evidence and witness_knowledge
+    queryable_facts = {
+        k: v for k, v in all_facts.items() if k not in case_file_facts
+    }
+    fact_items = list(queryable_facts.items())
+    random.shuffle(fact_items)
+
+    kb_size = int(len(fact_items) * kb_ratio)
+    kb_evidence = dict(fact_items[:kb_size])
+    witness_knowledge = dict(fact_items[kb_size:])
+
+    # Murder / body discovery room matches the secret room card (same as `_solution_room`).
+    body_fact = f"VictimFound_{room}"
+    # Remove from witness_knowledge if present (so Module 2 can't waste a query).
+    witness_knowledge.pop(body_fact, None)
+    # Force in kb_evidence as True (overwrite any previous split result).
+    kb_evidence[body_fact] = True
+
+    # Remove other VictimFound_* from witness_knowledge so Module 2 does not query them.
+    for r in rooms:
+        other = f"VictimFound_{r}"
+        if other != body_fact:
+            witness_knowledge.pop(other, None)
+
+    return {
+        "kb_evidence": kb_evidence,
+        "witness_knowledge": witness_knowledge,
+        "metadata": {
+            "case_id": f"RANDOM_CASE_{random.randint(1000, 9999)}",
+            "timestamp": "2024-01-15T21:00:00Z",
+            "investigator": "Detective_AI",
+            "generated": True,
+            "_difficulty": difficulty_norm,
+            "_solution_culprit": culprit,
+            "_solution_weapon": weapon,
+            "_solution_room": room,
+            "_solution_time": murder_time,
+            "_solution_note": "Reference only - modules do not use these fields. For manual verification after system runs.",
+        },
+    }
+
+
+# --- Logic: grounding and inference ---
+
+
+def ground_rule(rule: dict, game_constraints: dict) -> list[dict]:
+    """Turn one rule template into a list of concrete rules.
+
+    The rule dict has keys 'if' and 'then' (same shape as each entry in
+    rules.json under the "rules" key, loaded by read_rules). The
+    game_constraints dict is the one from rules.json (e.g. rules["game_constraints"]
+    from run). It uses placeholders PERSON, ROOM, TIME, etc. (see _PLACEHOLDERS
+    and _PLACEHOLDER_TO_KEY at top of file). Replaces those with every allowed
+    value from game_constraints so one template becomes many concrete rules.
+    """
+    grounded_rules = []
+    our_placeholders_set = set()
+    # 1) Identify which placeholders (PERSON, ROOM, etc.) appear in this rule.
+    for if_statement in rule["if"]:
+        current_if_statement = if_statement.split("_")  # e.g. "At_PERSON_ROOM_TIME" -> ["At","PERSON","ROOM","TIME"]
+        for placeholder in _PLACEHOLDERS:
+            if placeholder in current_if_statement:
+                our_placeholders_set.add(placeholder)
+
+    # rule["then"] is a single string, not a list
+    then_parts = rule["then"].split("_")
+    for placeholder in _PLACEHOLDERS:
+        if placeholder in then_parts:
+            our_placeholders_set.add(placeholder)
+
+    # Keep _PLACEHOLDERS order so ROOM1 is replaced before ROOM (avoids wrong substitution).
+    our_placeholders = [placeholder for placeholder in _PLACEHOLDERS if placeholder in our_placeholders_set]
+
+    # 2) For each placeholder, get the list of allowed values (e.g. suspects, rooms).
+    our_placeholder_values = {}
+    for our_placeholder in our_placeholders:
+        placeholder_key = _PLACEHOLDER_TO_KEY[our_placeholder]
+        placeholder_values = game_constraints[placeholder_key]
+        our_placeholder_values[our_placeholder] = placeholder_values
+
+    # 3) Cartesian product: each combination picks one value per placeholder (e.g. one person, one room, one time).
+    value_lists = [our_placeholder_values[ph] for ph in our_placeholders]
+    for combination in itertools.product(*value_lists):
+        substitution_map = dict(zip(our_placeholders, combination))  # e.g. {"PERSON":"Alice","ROOM":"Study"}
+        # R011-style rules require two different rooms; skip when ROOM1 == ROOM2.
+        if "ROOM1" in substitution_map and "ROOM2" in substitution_map and substitution_map["ROOM1"] == substitution_map["ROOM2"]:
+            continue
+        # 4) Replace every placeholder in each "if" string and in "then" with values from this combination.
+        grounded_if = []
+        for if_str in rule["if"]:
+            current_if_str = if_str
+            for placeholder in _PLACEHOLDERS:
+                if placeholder in substitution_map:
+                    current_if_str = current_if_str.replace(placeholder, substitution_map[placeholder])
+            grounded_if.append(current_if_str)
+        grounded_then = rule["then"]
+        for placeholder in _PLACEHOLDERS:
+            if placeholder in substitution_map:
+                grounded_then = grounded_then.replace(placeholder, substitution_map[placeholder])
+        grounded_rules.append({  # One concrete rule per combination
+            "id": rule["id"],
+            "if": grounded_if,
+            "then": grounded_then,
+        })
+    return grounded_rules
+
+
+def ground_all_rules(rules: list[dict], game_constraints: dict) -> list[dict]:
+    """Ground every rule in the rules list.
+
+    The rules list is the one from rules.json (rules["rules"] in run, where
+    rules comes from read_rules(rules_path)). game_constraints is
+    rules["game_constraints"]. Calls ground_rule (above) for each rule and
+    collects all concrete rules into one list for infer (below).
+    """
+    full_grounded_rules = []
+    for rule in rules:
+        grounded_for_this_rule = ground_rule(rule, game_constraints)
+        full_grounded_rules.extend(grounded_for_this_rule)  # Append all concrete rules from this template
+    return full_grounded_rules
+
+
+def build_kb(initial_evidence: dict) -> dict:
+    """Build the starting knowledge base from the case's initial evidence.
+
+    The KB stores only TRUE values; absence means false (cannot imply or chain).
+    We copy only propositions that are True in initial_evidence into a new dict.
+    This dict is then passed to infer and may be checked by has_contradiction.
+    """
+    # Only store propositions that are True; absence in KB means false.
+    return {proposition_name: True for proposition_name, truth_value in initial_evidence.items() if truth_value is True}
+
+
+_NOT_PREFIX = "NOT_"
+
+
+def rule_premises_met(grounded_rule: dict, kb: dict) -> bool:
+    """Check whether all 'if' conditions of a grounded rule are true in the KB.
+
+    KB stores only True; absence means false. For each premise in grounded_rule["if"]:
+    if it starts with NOT_, the rest must be false (absent or not True in kb);
+    otherwise the proposition must be in kb (i.e. true). Returns True only if
+    all premises are satisfied.
+    """
+    for premise in grounded_rule["if"]:
+        if premise.startswith(_NOT_PREFIX):
+            # NOT_X is satisfied only if X is false (absent or not True in KB).
+            proposition_name = premise[len(_NOT_PREFIX) :]
+            if kb.get(proposition_name) is True:
+                return False
+        else:
+            # Positive premise: must be present and True in KB.
+            if kb.get(premise) is not True:
+                return False
+    return True
+
+
+def apply_rule(grounded_rule: dict, kb: dict) -> bool:
+    """If the rule's premises are met, add its conclusion to the KB.
+
+    KB stores only True. If rule_premises_met is True, add grounded_rule["then"]
+    to kb as True (or record CONTRADICTION). Returns True if something was
+    added or contradiction found, False otherwise.
+    """
+    if not rule_premises_met(grounded_rule, kb):
+        return False  # Premises not all true; rule does not fire.
+    conclusion = grounded_rule["then"]
+    if conclusion == _CONTRADICTION_KEY:
+        kb[_CONTRADICTION_KEY] = True
+        if _CONTRADICTION_GROUNDED_RULES_KEY not in kb:
+            kb[_CONTRADICTION_GROUNDED_RULES_KEY] = []
+        # Store a copy of the grounded rule (id + concrete if/then with person, time, place, etc.).
+        kb[_CONTRADICTION_GROUNDED_RULES_KEY].append({
+            "id": grounded_rule.get("id", "?"),
+            "if": list(grounded_rule["if"]),
+            "then": grounded_rule["then"],
+        })
+        return True  # Contradiction rule fired; infer will stop.
+    if kb.get(conclusion) is True:
+        return False  # Conclusion already in KB; nothing new added.
+    kb[conclusion] = True
+    return True  # New fact added.
+
+
+def infer(kb: dict, grounded_rules: list[dict]) -> None:
+    """Repeatedly apply all grounded rules until no new facts are derived.
+
+    kb is the knowledge base from build_kb. grounded_rules is the list from
+    ground_all_rules. In a loop, call apply_rule for each grounded rule; when
+    a rule adds a fact, that may let other rules fire. Stop when no rule adds
+    anything new, or when apply_rule returns True for a CONTRADICTION. Modifies
+    kb in place (same dict that has_contradiction can later check).
+    """
+    # Forward chaining: keep applying rules until no new facts or a contradiction.
+    while True:
+        changed = False
+        for rule in grounded_rules:
+            if apply_rule(rule, kb):
+                changed = True
+                if has_contradiction(kb):
+                    # Keep going this pass so we record every contradiction rule that fires.
+                    pass
+        if not changed:
+            break  # No rule fired this pass; we're done.
+        if has_contradiction(kb):
+            break  # Contradiction found; stop after this pass (report will list all that fired).
+
+
+def has_contradiction(kb: dict) -> bool:
+    """Return True if we have inferred that a contradiction occurred.
+
+    KB stores only True; CONTRADICTION is stored as kb["CONTRADICTION"] = True
+    when a contradiction rule fires. Return True if that key is present.
+    """
+    return kb.get(_CONTRADICTION_KEY) is True  # Set by apply_rule when a contradiction rule fires.
+
+
+# --- Entry point ---
+
+
+def run_random_case(
+    rules_path: str | Path,
+    output_dir: str | Path,
+    seed: int | None = None,
+    kb_ratio: float = 0.5,
+    murder_time: str | None = None,
+    difficulty: str = "easy",
+    show_case_view: bool = False,
+) -> dict:
+    """Generate a random case and run Module 1 pipeline on it.
+
+    Convenience function that combines generate_random_case() and run() logic.
+    Useful for testing and exploration with varied cases.
+
+    Args:
+        rules_path: Path to rules.json.
+        output_dir: Directory where output files will be written:
+            - evidence_found.json: KB after inference
+            - questionable_evidence_report.txt: Contradiction report
+            - case_init_generated.json: Generated case_init (kb_evidence + witness_knowledge) for review
+        seed: Optional random seed for reproducibility.
+        kb_ratio: Fraction of facts to put in kb_evidence.
+        murder_time: Optional specific time for murder.
+        difficulty: Passed to :func:`generate_random_case` (default ``"easy"``; use ``"normal"`` for harder cases).
+
+    Returns:
+        dict with case data (kb_evidence, witness_knowledge, metadata) and solution info.
+    """
+    case = generate_random_case(
+        rules_path,
+        seed=seed,
+        kb_ratio=kb_ratio,
+        murder_time=murder_time,
+        difficulty=difficulty,
+    )
+    rules = read_rules(rules_path)
+    kb = build_kb(case["kb_evidence"])
+    all_rules = ground_all_rules(rules["rules"], rules["game_constraints"])
+    infer(kb, all_rules)
+
+    # Write outputs
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    evidence_path = output_dir / "evidence_found.json"
+    report_path = output_dir / "questionable_evidence_report.txt"
+
+    # Write evidence_found.json
+    evidence_dict: dict[str, Any] = {"evidence": {}, "metadata": case["metadata"]}
+    for proposition_name in kb:
+        if proposition_name not in (_CONTRADICTION_KEY, _CONTRADICTION_GROUNDED_RULES_KEY):
+            evidence_dict["evidence"][proposition_name] = True
+
+    with open(evidence_path, "w", encoding="utf-8") as f:
+        json.dump(evidence_dict, f, indent=2)
+
+    # Write questionable_evidence_report.txt
+    has_contradiction_flag = has_contradiction(kb)
+    with open(report_path, "w", encoding="utf-8") as f:
+        f.write("Questionable Evidence Report\n")
+        f.write("=" * 25 + "\n\n")
+        f.write(f"Contradiction detected: {has_contradiction_flag}\n")
+        true_props = [p for p in kb if p not in (_CONTRADICTION_KEY, _CONTRADICTION_GROUNDED_RULES_KEY)]
+        f.write(f"Total propositions (true): {len(true_props)}\n")
+        if has_contradiction_flag:
+            f.write("\nGrounded rules that produced a contradiction:\n")
+            for gr in kb.get(_CONTRADICTION_GROUNDED_RULES_KEY, []):
+                rule_id = gr.get("id", "?")
+                premises = gr.get("if", [])
+                f.write(f"  - {rule_id}: Contradiction: Person cannot have alibi \n")
+                f.write(f"    and be culprit at same time\n")
+                f.write(f"    Grounded premises: {premises}\n")
+
+    # Write the generated case_init.json for review (combines kb_evidence and witness_knowledge)
+    case_init_path = output_dir / "case_init_generated.json"
+    initial_evidence = {**case["kb_evidence"], **case["witness_knowledge"]}
+    case_init_data = {
+        "initial_evidence": initial_evidence,
+        "metadata": case["metadata"],
+    }
+    with open(case_init_path, "w", encoding="utf-8") as f:
+        json.dump(case_init_data, f, indent=2)
+
+    if show_case_view:
+        from src.case_viewer import get_solution_from_metadata, show_case_view as show_view
+        rules_data = read_rules(rules_path)
+        gc = rules_data.get("game_constraints", {})
+        rooms = gc.get("rooms", [])
+        time_points = gc.get("time_points", ["8pm", "9pm", "10pm"])
+        evidence_for_view = {
+            k: True for k in kb
+            if k not in (_CONTRADICTION_KEY, _CONTRADICTION_GROUNDED_RULES_KEY)
+        }
+        solution = get_solution_from_metadata(case["metadata"])
+        show_view(
+            module_id=1,
+            title="Module 1 — Case init & evidence",
+            solution=solution,
+            evidence=evidence_for_view,
+            rooms=rooms,
+            time_points=time_points,
+            extra_lines=["(Solution from generated case; Module 1 knows culprit/weapon/room.)"],
+        )
+
+    return case

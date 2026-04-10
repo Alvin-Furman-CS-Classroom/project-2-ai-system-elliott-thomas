@@ -1,0 +1,24 @@
+{
+  "witness_queries_added": [
+    {
+      "question": "Alibi_ColonelMustard_9pm",
+      "value": false
+    },
+    {
+      "question": "At_ColonelMustard_Study_10pm",
+      "value": false
+    },
+    {
+      "question": "At_MissScarlet_Ballroom_10pm",
+      "value": false
+    },
+    {
+      "question": "At_MissScarlet_Ballroom_9pm",
+      "value": true
+    },
+    {
+      "question": "At_MrGreen_Conservatory_8pm",
+      "value": true
+    }
+  ]
+}

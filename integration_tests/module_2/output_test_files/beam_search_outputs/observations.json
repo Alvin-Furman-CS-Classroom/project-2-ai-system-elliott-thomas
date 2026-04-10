@@ -1,0 +1,24 @@
+{
+  "observations": [
+    {
+      "action": "Weapon_LeadPipe_Kitchen",
+      "result": false
+    },
+    {
+      "action": "Weapon_Dagger_Ballroom",
+      "result": false
+    },
+    {
+      "action": "Alibi_ColonelMustard_9pm",
+      "result": false
+    },
+    {
+      "action": "At_MrsWhite_Kitchen_8pm",
+      "result": false
+    },
+    {
+      "action": "Weapon_LeadPipe_Kitchen",
+      "result": false
+    }
+  ]
+}

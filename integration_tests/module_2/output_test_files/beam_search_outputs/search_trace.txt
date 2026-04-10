@@ -1,0 +1,22 @@
+Beam search trace (Module 2)
+========================================
+
+Step 0 (candidates=13):
+  heuristics: [76.09918798188623, 76.09521008967381, 76.08784243349372]
+  queries: [['Weapon_LeadPipe_Kitchen'], ['KeyFound_Study'], ['Alibi_ColonelMustard_9pm']]
+
+Step 1 (candidates=39):
+  heuristics: [76.09888797191067, 76.09654382506851, 76.0956492899022]
+  queries: [['Weapon_LeadPipe_Kitchen', 'BloodStains_Ballroom'], ['Weapon_LeadPipe_Kitchen', 'Weapon_Dagger_Ballroom'], ['Alibi_ColonelMustard_9pm', 'Alibi_ColonelMustard_9pm']]
+
+Step 2 (candidates=39):
+  heuristics: [76.095626959036, 76.09444460172345, 76.09404130428761]
+  queries: [['Weapon_LeadPipe_Kitchen', 'BloodStains_Ballroom', 'BloodStains_Ballroom'], ['Weapon_LeadPipe_Kitchen', 'Weapon_Dagger_Ballroom', 'Alibi_ColonelMustard_9pm'], ['Alibi_ColonelMustard_9pm', 'Alibi_ColonelMustard_9pm', 'Weapon_Dagger_Ballroom']]
+
+Step 3 (candidates=39):
+  heuristics: [76.09738687037866, 76.09610911502043, 76.09442643490047]
+  queries: [['Weapon_LeadPipe_Kitchen', 'BloodStains_Ballroom', 'BloodStains_Ballroom', 'Weapon_Dagger_Ballroom'], ['Weapon_LeadPipe_Kitchen', 'Weapon_Dagger_Ballroom', 'Alibi_ColonelMustard_9pm', 'Weapon_LeadPipe_Kitchen'], ['Weapon_LeadPipe_Kitchen', 'Weapon_Dagger_Ballroom', 'Alibi_ColonelMustard_9pm', 'At_MrsWhite_Kitchen_8pm']]
+
+Step 4 (candidates=39):
+  heuristics: [76.09612111637028, 76.09304598848928, 76.0912006477468]
+  queries: [['Weapon_LeadPipe_Kitchen', 'Weapon_Dagger_Ballroom', 'Alibi_ColonelMustard_9pm', 'At_MrsWhite_Kitchen_8pm', 'Weapon_LeadPipe_Kitchen'], ['Weapon_LeadPipe_Kitchen', 'Weapon_Dagger_Ballroom', 'Alibi_ColonelMustard_9pm', 'Weapon_LeadPipe_Kitchen', 'KeyFound_Study'], ['Weapon_LeadPipe_Kitchen', 'Weapon_Dagger_Ballroom', 'Alibi_ColonelMustard_9pm', 'At_MrsWhite_Kitchen_8pm', 'Fingerprints_Kitchen_MrsWhite']]

@@ -1,0 +1,40 @@
+{
+  "initial_evidence": {
+    "At_ColonelMustard_Study_9pm": true,
+    "At_MissScarlet_Ballroom_9pm": true,
+    "At_ProfessorPlum_Library_9pm": false,
+    "At_MrGreen_Conservatory_9pm": true,
+    "At_MrsWhite_Kitchen_9pm": false,
+    "At_MrsPeacock_DiningRoom_9pm": true,
+    "Weapon_Candlestick_Study": true,
+    "Weapon_Dagger_Ballroom": false,
+    "Weapon_LeadPipe_Kitchen": true,
+    "Weapon_Revolver_Library": false,
+    "Weapon_Rope_Conservatory": false,
+    "Weapon_Wrench_DiningRoom": false,
+    "DoorLocked_Study_9pm": true,
+    "DoorLocked_Ballroom_9pm": false,
+    "DoorLocked_Kitchen_9pm": false,
+    "Fingerprints_Study_ColonelMustard": true,
+    "Fingerprints_Ballroom_MissScarlet": true,
+    "Fingerprints_Kitchen_MrsWhite": false,
+    "Alibi_ColonelMustard_9pm": false,
+    "Alibi_MissScarlet_9pm": true,
+    "Alibi_ProfessorPlum_9pm": true,
+    "Alibi_MrGreen_9pm": false,
+    "Alibi_MrsWhite_9pm": true,
+    "Alibi_MrsPeacock_9pm": false,
+    "VictimFound_Study": true,
+    "VictimFound_Ballroom": false,
+    "VictimFound_Kitchen": false,
+    "NoiseHeard_Study_9pm": true,
+    "NoiseHeard_Ballroom_9pm": false,
+    "BloodStains_Study": true,
+    "BloodStains_Ballroom": false
+  },
+  "metadata": {
+    "case_id": "CLUE_CASE_001",
+    "timestamp": "2024-01-15T21:00:00Z",
+    "investigator": "Detective_AI"
+  }
+}

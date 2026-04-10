@@ -1,0 +1,16 @@
+{
+  "observations": [
+    {
+      "action": "Weapon_LeadPipe_Kitchen",
+      "result": false
+    },
+    {
+      "action": "At_ColonelMustard_Study_8pm",
+      "result": false
+    },
+    {
+      "action": "KeyFound_Study",
+      "result": false
+    }
+  ]
+}
